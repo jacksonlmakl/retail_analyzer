@@ -5,28 +5,30 @@ Scrape Google Shopping product data and load it into Snowflake for analysis.
 ```
 retail_analyzer/
 ├── src/
-│   ├── scraper.py          # Google Shopping scraper (Playwright)
-│   └── loader.py           # Snowflake connection & data loading
+│   ├── scraper.py              # Google Shopping scraper (Playwright)
+│   └── loader.py               # Snowflake connection & data loading
 ├── api/
-│   ├── server.py           # FastAPI endpoints (POST /scrape, POST /verify)
-│   ├── tasks.py            # Celery tasks (scrape_and_load, verify_products)
-│   └── celeryconfig.py     # Celery + Beat schedule config
+│   ├── server.py               # FastAPI endpoints (POST /scrape, POST /verify)
+│   ├── tasks.py                # Celery tasks (scrape_and_load, verify_products)
+│   └── celeryconfig.py         # Celery + Beat schedule config
 ├── dags/
 │   └── verify_products_dag.py  # Airflow DAG for scheduled verification
 ├── sql/
-│   ├── setup.sql           # DDL: database, tables, stages, views
-│   ├── load.sql            # Reference: manual SnowSQL load commands
-│   └── migrations/         # Incremental schema changes
-├── output/                 # Scraper results (gitignored)
+│   ├── setup.sql               # DDL: database, tables, stages, views
+│   ├── load.sql                # Reference: manual SnowSQL load commands
+│   └── migrations/             # Incremental schema changes
+├── output/                     # Scraper results (gitignored)
 │   ├── results.json
 │   └── images/
-├── run_pipeline.py         # CLI entry point: scrape + load
-├── verify_products.py      # CLI: verify listings are still live
-├── Dockerfile              # Container image (shared by all services)
-├── docker-compose.yml      # Full stack: redis, api, worker, beat, airflow
-├── requirements.txt
-├── .env.example            # Template for Docker env vars
-└── .env.sh                 # Snowflake credentials for local dev (gitignored)
+├── run_pipeline.py             # CLI entry point: scrape + load
+├── verify_products.py          # CLI: verify listings are still live
+├── Dockerfile                  # Container image for api, worker, beat
+├── Dockerfile.airflow          # Lightweight container for Airflow
+├── docker-compose.yml          # Full stack: redis, api, worker, beat, airflow
+├── requirements.txt            # Python deps for scraper/api/worker
+├── requirements-airflow.txt    # Python deps for Airflow container
+├── .env.example                # Template for environment variables
+└── .env.sh                     # Snowflake credentials for local dev (gitignored)
 ```
 
 ## Setup
@@ -43,7 +45,7 @@ Run the scraper standalone without Snowflake:
 ```bash
 python -m src.scraper "wireless headphones"
 python -m src.scraper "gaming monitor" --pages 2 --output output/results.json
-python -m src.scraper "running shoes" --output output/results.csv --details
+python -m src.scraper "running shoes" --output output/results.csv
 ```
 
 ### Scraper CLI Options
@@ -124,11 +126,12 @@ python run_pipeline.py "mechanical keyboard" --skip-scrape
 ### What the Pipeline Does
 
 1. Scrapes Google Shopping for your query
-2. Saves `results.json` and product images to `output/`
-3. Connects to Snowflake via RSA key-pair authentication
-4. Uploads JSON to `@SCRAPE_DATA` and images to `@PRODUCT_IMAGES`
-5. Upserts the search query into `SEARCH_QUERIES`, creates a `SCRAPE_RUNS` record, loads products into `PRODUCTS`, and links them via `PRODUCT_QUERIES`
-6. Prints a summary with the run ID
+2. Extracts merchant links for each product (clicks each card to capture the retailer URL)
+3. Drops any products that don't have a valid merchant link
+4. Saves `results.json` and product images to `output/`
+5. Connects to Snowflake via RSA key-pair authentication
+6. Uploads JSON to `@SCRAPE_DATA` and images to `@PRODUCT_IMAGES`
+7. Upserts the search query into `SEARCH_QUERIES`, creates a `SCRAPE_RUNS` record, loads products into `PRODUCTS`, and links them via `PRODUCT_QUERIES`
 
 ### Querying Your Data
 
@@ -201,13 +204,19 @@ Each product includes:
 - **rating** — Star rating (e.g. "4.8/5")
 - **reviews** — Review count
 - **shipping** — Shipping/delivery info
-- **link** — Merchant URL (requires `--details` flag)
+- **link** — Merchant URL (always captured; products without a link are excluded)
 - **image_url** — Product thumbnail URL
 - **image_path** — Local path to saved thumbnail
 
 ## Docker Compose (API + Workers + Airflow)
 
 Run the full stack in containers: a FastAPI scrape API, Celery workers for parallel scraping, Celery Beat for scheduled verification, and Airflow for monitoring.
+
+The stack uses two separate Docker images:
+- `Dockerfile` — scraper, API, workers, and beat (Playwright, Chromium, Snowflake connector)
+- `Dockerfile.airflow` — Airflow only (lightweight, no browser dependencies)
+
+Workers run Chromium inside a virtual framebuffer (Xvfb) so Google Shopping sees a headed browser, avoiding bot detection.
 
 ### Quick Start
 
@@ -221,13 +230,13 @@ cp .env.example .env
 2. Start all services:
 
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 3. Scale workers for parallel scraping:
 
 ```bash
-docker-compose up -d --scale worker=5
+docker compose up -d --scale worker=5
 ```
 
 ### API Endpoints
@@ -270,17 +279,23 @@ curl http://localhost:8000/health
 
 ### Airflow UI
 
-Open http://localhost:8080 (login: `admin` / `admin`) to monitor and manually trigger the `verify_products` DAG.
+Airflow runs on http://localhost:8080. The admin password is auto-generated on first startup — check the airflow container logs for the line:
+
+```
+Simple auth manager | Password for user 'admin': <generated_password>
+```
+
+The `verify_products` DAG runs daily and calls the API's `/verify` endpoint over HTTP. This means Airflow and the API can be deployed to separate infrastructure (different cloud providers, etc.) — just set `RETAIL_API_URL` in the Airflow environment.
 
 ### Services
 
-| Service | Port | Description |
-|---|---|---|
-| `api` | 8000 | FastAPI server for on-demand scraping |
-| `worker` | -- | Celery workers (Playwright + Snowflake) |
-| `beat` | -- | Celery Beat scheduler (periodic verification) |
-| `airflow` | 8080 | Airflow webserver + scheduler |
-| `redis` | 6379 | Message broker |
+| Service | Port | Image | Description |
+|---|---|---|---|
+| `api` | 8000 | `Dockerfile` | FastAPI server for on-demand scraping |
+| `worker` | — | `Dockerfile` | Celery workers (Playwright + Xvfb + Snowflake) |
+| `beat` | — | `Dockerfile` | Celery Beat scheduler (periodic verification) |
+| `airflow` | 8080 | `Dockerfile.airflow` | Airflow scheduler + web UI |
+| `redis` | 6379 | `redis:7-alpine` | Message broker |
 
 ### Environment Variables
 
@@ -292,12 +307,14 @@ Open http://localhost:8080 (login: `admin` / `admin`) to monitor and manually tr
 | `SNOWFLAKE_WAREHOUSE` | Snowflake warehouse name | required |
 | `SNOWFLAKE_ROLE` | Snowflake role | optional |
 | `REDIS_URL` | Redis connection URL | `redis://redis:6379/0` |
-| `VERIFY_INTERVAL_HOURS` | Hours between auto-verification runs | `24` |
+| `RETAIL_API_URL` | API URL for Airflow to call (override for cross-cloud) | `http://api:8000` |
+| `VERIFY_INTERVAL_HOURS` | Hours between auto-verification runs (Celery Beat) | `24` |
 | `VERIFY_STALE_DAYS` | Days before a query is considered stale | `7` |
 
 ## Notes
 
-- A visible browser window will briefly appear during local scraping (intentional -- headless mode triggers Google's bot detection). Docker containers always use headless mode.
+- A visible browser window will briefly appear during local scraping (intentional — headed mode bypasses Google's bot detection). Docker containers use a virtual framebuffer (Xvfb) for the same effect without a display.
+- Products without a valid merchant link are automatically excluded from results and Snowflake.
+- The scraper auto-detects Google Shopping's product card CSS selectors, with fallback heuristics if Google rotates class names.
 - The first run may be slower as it sets up the browser profile.
 - If you get CAPTCHA pages, wait a few minutes and try again with higher delays.
-- Google Shopping's DOM structure changes periodically, so selectors may need updating.
