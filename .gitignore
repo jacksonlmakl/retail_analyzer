@@ -19,11 +19,6 @@ output/
 # Browser profile
 .cache/
 
-# Airflow
-airflow-data/
-logs/
-*.pid
-
 # Docker
 .env
 

@@ -1,34 +1,90 @@
 # Retail Analyzer
 
-Scrape Google Shopping product data and load it into Snowflake for analysis.
+Scrape product listings from multiple luxury/resale marketplaces and load the data into Snowflake for cross-marketplace analysis.
+
+**Supported Marketplaces:**
+
+| Marketplace | Scraping Method | Snowflake Schema | API Port |
+|---|---|---|---|
+| Google Shopping | Playwright (DOM + panel links) | `GOOGLE_SHOPPING` | 8000 |
+| Grailed | `grailed_api` Python package (Algolia) | `GRAILED` | 8001 |
+| Vestiaire Collective | Playwright (React SPA) | `VESTIAIRE` | 8002 |
+| Rebag | Playwright (JS-rendered) | `REBAG` | 8003 |
+| Farfetch | Playwright (bot-protected) | `FARFETCH` | 8004 |
+| Fashionphile | Playwright (search page) | `FASHIONPHILE` | 8005 |
+| 2nd Street USA | Shopify JSON + Playwright fallback | `SECOND_STREET` | 8006 |
 
 ```
 retail_analyzer/
-├── src/
-│   ├── scraper.py              # Google Shopping scraper (Playwright)
-│   └── loader.py               # Snowflake connection & data loading
-├── api/
-│   ├── server.py               # FastAPI endpoints (POST /scrape, POST /verify)
-│   ├── tasks.py                # Celery tasks (scrape_and_load, verify_products)
-│   └── celeryconfig.py         # Celery + Beat schedule config
-├── dags/
-│   └── verify_products_dag.py  # Airflow DAG for scheduled verification
+├── shared/                      # Shared Snowflake connection module
+│   ├── __init__.py
+│   └── snowflake.py             # get_connection(), check_env(), run_setup()
+├── src/                         # Google Shopping scraper
+│   ├── scraper.py
+│   └── loader.py
+├── api/                         # Google Shopping API + Celery
+│   ├── server.py
+│   ├── tasks.py
+│   └── celeryconfig.py
+├── grailed/                     # Grailed scraper service
+│   ├── scraper.py               # Uses grailed_api package
+│   ├── loader.py
+│   ├── server.py
+│   ├── tasks.py
+│   ├── celeryconfig.py
+│   ├── sql/setup.sql
+│   └── Dockerfile
+├── vestiaire/                   # Vestiaire Collective scraper service
+│   ├── scraper.py               # Playwright-based
+│   ├── loader.py
+│   ├── server.py
+│   ├── tasks.py
+│   ├── celeryconfig.py
+│   ├── sql/setup.sql
+│   └── Dockerfile
+├── rebag/                       # Rebag scraper service
+│   ├── scraper.py
+│   ├── loader.py
+│   ├── server.py
+│   ├── tasks.py
+│   ├── celeryconfig.py
+│   ├── sql/setup.sql
+│   └── Dockerfile
+├── farfetch/                    # Farfetch scraper service
+│   ├── scraper.py
+│   ├── loader.py
+│   ├── server.py
+│   ├── tasks.py
+│   ├── celeryconfig.py
+│   ├── sql/setup.sql
+│   └── Dockerfile
+├── fashionphile/                # Fashionphile scraper service
+│   ├── scraper.py
+│   ├── loader.py
+│   ├── server.py
+│   ├── tasks.py
+│   ├── celeryconfig.py
+│   ├── sql/setup.sql
+│   └── Dockerfile
+├── secondstreet/                # 2nd Street USA scraper service
+│   ├── scraper.py               # Shopify JSON fast path + Playwright fallback
+│   ├── loader.py
+│   ├── server.py
+│   ├── tasks.py
+│   ├── celeryconfig.py
+│   ├── sql/setup.sql
+│   └── Dockerfile
 ├── sql/
-│   ├── setup.sql               # DDL: database, tables, stages, views
-│   ├── load.sql                # Reference: manual SnowSQL load commands
-│   └── migrations/             # Incremental schema changes
-├── output/                     # Scraper results (gitignored)
-│   ├── results.json
-│   └── images/
-├── run_pipeline.py             # CLI entry point: scrape + load
-├── verify_products.py          # CLI: verify listings are still live
-├── Dockerfile                  # Container image for api, worker, beat
-├── Dockerfile.airflow          # Lightweight container for Airflow
-├── docker-compose.yml          # Full stack: redis, api, worker, beat, airflow
-├── requirements.txt            # Python deps for scraper/api/worker
-├── requirements-airflow.txt    # Python deps for Airflow container
-├── .env.example                # Template for environment variables
-└── .env.sh                     # Snowflake credentials for local dev (gitignored)
+│   ├── setup.sql                # Google Shopping DDL
+│   ├── load.sql
+│   └── migrations/
+├── output/                      # Local scraper results (gitignored)
+├── run_pipeline.py              # CLI: scrape Google Shopping + load to Snowflake
+├── Dockerfile                   # Google Shopping container
+├── docker-compose.yml           # Full stack: redis + 7 APIs + 6 workers
+├── requirements.txt             # Python dependencies
+├── .env.example                 # Env var template
+└── .env.sh                      # Snowflake credentials for local dev (gitignored)
 ```
 
 ## Setup
@@ -38,23 +94,22 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-## Scraper Only
+## Google Shopping Scraper (Standalone)
 
 Run the scraper standalone without Snowflake:
 
 ```bash
 python -m src.scraper "wireless headphones"
 python -m src.scraper "gaming monitor" --pages 2 --output output/results.json
-python -m src.scraper "running shoes" --output output/results.csv
 ```
 
 ### Scraper CLI Options
 
 | Option | Description | Default |
 |---|---|---|
-| `query` | Search term (required) | — |
+| `query` | Search term (required) | -- |
 | `--pages` | Number of result pages | 1 |
-| `--output`, `-o` | Output file (.json or .csv) | — |
+| `--output`, `-o` | Output file (.json or .csv) | -- |
 | `--details` | Click each product for merchant links (slower) | off |
 | `--country` | Country code for localized results | us |
 | `--language` | Language code | en |
@@ -115,7 +170,7 @@ python run_pipeline.py "mechanical keyboard" --skip-scrape
 
 | Option | Description | Default |
 |---|---|---|
-| `query` | Search term (required) | — |
+| `query` | Search term (required) | -- |
 | `--pages` | Number of result pages to scrape | 1 |
 | `--country` | Country code | us |
 | `--language` | Language code | en |
@@ -136,87 +191,43 @@ python run_pipeline.py "mechanical keyboard" --skip-scrape
 ### Querying Your Data
 
 ```sql
+-- Google Shopping
 SELECT * FROM RETAIL_ANALYZER.GOOGLE_SHOPPING.PRODUCTS_ANALYSIS
-WHERE RUN_ID = <your_run_id>
+WHERE RUN_ID = <your_run_id> ORDER BY PRICE_NUMERIC;
+
+-- Grailed
+SELECT * FROM RETAIL_ANALYZER.GRAILED.PRODUCTS_ANALYSIS
+WHERE RUN_ID = <your_run_id> ORDER BY PRICE_NUMERIC;
+
+-- Cross-marketplace comparison (example)
+SELECT 'Google Shopping' AS source, TITLE, PRICE_NUMERIC
+FROM RETAIL_ANALYZER.GOOGLE_SHOPPING.PRODUCTS WHERE TITLE ILIKE '%louis vuitton%'
+UNION ALL
+SELECT 'Grailed', TITLE, PRICE_NUMERIC
+FROM RETAIL_ANALYZER.GRAILED.PRODUCTS WHERE TITLE ILIKE '%louis vuitton%'
 ORDER BY PRICE_NUMERIC;
-```
-
-## Verify Product Listings
-
-Check whether previously scraped products are still listed on Google Shopping. Updates changed fields (price, seller, etc.) and marks missing products as inactive.
-
-**If upgrading an existing database**, run the migrations in order:
-
-```bash
-# In Snowflake, run:
-# sql/migrations/001_add_verification_columns.sql
-# sql/migrations/002_add_search_query_column.sql
-# sql/migrations/003_normalize_search_queries.sql
-```
-
-If you started fresh with `--setup`, all tables are already included.
-
-### Usage
-
-```bash
-python verify_products.py                    # verify all active products
-python verify_products.py --run-id 101       # verify only products from a specific run
-python verify_products.py --query "gucci"    # verify products whose search query contains "gucci"
-python verify_products.py --dry-run          # preview changes without writing to Snowflake
-```
-
-### Verification CLI Options
-
-| Option | Description | Default |
-|---|---|---|
-| `--run-id` | Only verify products from this scrape run ID | all |
-| `--query` | Filter by search query (substring match) | all |
-| `--headless` | Run browser headless (may trigger CAPTCHA) | off |
-| `--dry-run` | Show what would change without writing to Snowflake | off |
-
-### How It Works
-
-1. Fetches all active products from Snowflake, grouped by their original search query
-2. Re-runs each search query through the Google Shopping scraper
-3. Fuzzy-matches stored products against fresh results by title (80% similarity threshold)
-4. For matched products: updates any changed fields (price, seller, rating, etc.) and sets `LAST_VERIFIED_AT`
-5. For unmatched products: double-checks the merchant link before marking `IS_ACTIVE = FALSE`
-6. Prints a summary of what changed
-
-### Querying Inactive Products
-
-```sql
-SELECT TITLE, PRICE, SELLER, LAST_VERIFIED_AT
-FROM RETAIL_ANALYZER.GOOGLE_SHOPPING.PRODUCTS
-WHERE IS_ACTIVE = FALSE
-ORDER BY LAST_VERIFIED_AT DESC;
 ```
 
 ## Output Fields
 
-Each product includes:
+Each product includes (varies by marketplace):
 
-- **title** — Product name
-- **price** — Current listed price
-- **original_price** — Original price before discount (if on sale)
-- **discount** — Discount badge (e.g. "28% OFF")
-- **seller** — Store/merchant name
-- **rating** — Star rating (e.g. "4.8/5")
-- **reviews** — Review count
-- **shipping** — Shipping/delivery info
-- **link** — Merchant URL (always captured; products without a link are excluded)
-- **image_url** — Product thumbnail URL
-- **image_path** — Local path to saved thumbnail
+- **title** -- Product name
+- **price** -- Current listed price
+- **original_price** -- Original price before discount (if on sale)
+- **discount** -- Discount badge (e.g. "28% OFF")
+- **link** -- Product URL (always captured; products without a link are excluded)
+- **image_url** / **image_path** -- Product thumbnail
+- **designer** / **brand** -- Brand or designer name (marketplace-specific)
+- **condition** -- Item condition (Grailed, Vestiaire, Rebag, Fashionphile, 2nd Street)
+- **category**, **color**, **material**, **size_info** -- Additional metadata (where available)
+- **seller** / **rating** / **reviews** / **shipping** -- Google Shopping specific
 
-## Docker Compose (API + Workers + Airflow)
+## Docker Compose (Multi-Marketplace)
 
-Run the full stack in containers: a FastAPI scrape API, Celery workers for parallel scraping, Celery Beat for scheduled verification, and Airflow for monitoring.
+Run the full stack: 7 marketplace APIs, 6 Celery workers, and Redis.
 
-The stack uses two separate Docker images:
-- `Dockerfile` — scraper, API, workers, and beat (Playwright, Chromium, Snowflake connector)
-- `Dockerfile.airflow` — Airflow only (lightweight, no browser dependencies)
-
-Workers run Chromium inside a virtual framebuffer (Xvfb) so Google Shopping sees a headed browser, avoiding bot detection.
+Workers run Chromium inside a virtual framebuffer (Xvfb) so marketplace sites see a headed browser, avoiding bot detection. Grailed uses an API-only approach (no Playwright needed).
 
 ### Quick Start
 
@@ -233,69 +244,84 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-3. Scale workers for parallel scraping:
+3. Start only specific marketplaces:
 
 ```bash
-docker compose up -d --scale worker=5
+docker compose up -d redis api worker grailed-api grailed-worker
 ```
 
 ### API Endpoints
 
+Every marketplace service exposes the same three endpoints:
+
 **Trigger a scrape:**
 
 ```bash
+# Google Shopping (port 8000)
 curl -X POST http://localhost:8000/scrape \
   -H "Content-Type: application/json" \
-  -d '{"query": "mechanical keyboard", "pages": 2}'
-# Returns: {"task_id": "abc-123", "status": "queued"}
+  -d '{"query": "louis vuitton infrarouge", "pages": 1}'
+
+# Grailed (port 8001)
+curl -X POST http://localhost:8001/scrape \
+  -H "Content-Type: application/json" \
+  -d '{"query": "louis vuitton infrarouge", "pages": 1}'
+
+# Vestiaire (port 8002)
+curl -X POST http://localhost:8002/scrape \
+  -H "Content-Type: application/json" \
+  -d '{"query": "louis vuitton infrarouge"}'
+
+# Rebag (8003), Farfetch (8004), Fashionphile (8005), 2nd Street (8006) -- same pattern
 ```
 
 **Check scrape status:**
 
 ```bash
-curl http://localhost:8000/scrape/abc-123
-# Returns: {"task_id": "abc-123", "status": "SUCCESS", "result": {"run_id": 42, "products_loaded": 30}}
-```
-
-**Trigger verification:**
-
-```bash
-curl -X POST http://localhost:8000/verify \
-  -H "Content-Type: application/json" \
-  -d '{"max_stale_days": 7}'
-```
-
-**Check verification status:**
-
-```bash
-curl http://localhost:8000/verify/def-456
+curl http://localhost:8001/scrape/<task_id>
 ```
 
 **Health check:**
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8001/health
 ```
-
-### Airflow UI
-
-Airflow runs on http://localhost:8080. The admin password is auto-generated on first startup — check the airflow container logs for the line:
-
-```
-Simple auth manager | Password for user 'admin': <generated_password>
-```
-
-The `verify_products` DAG runs daily and calls the API's `/verify` endpoint over HTTP. This means Airflow and the API can be deployed to separate infrastructure (different cloud providers, etc.) — just set `RETAIL_API_URL` in the Airflow environment.
 
 ### Services
 
-| Service | Port | Image | Description |
-|---|---|---|---|
-| `api` | 8000 | `Dockerfile` | FastAPI server for on-demand scraping |
-| `worker` | — | `Dockerfile` | Celery workers (Playwright + Xvfb + Snowflake) |
-| `beat` | — | `Dockerfile` | Celery Beat scheduler (periodic verification) |
-| `airflow` | 8080 | `Dockerfile.airflow` | Airflow scheduler + web UI |
-| `redis` | 6379 | `redis:7-alpine` | Message broker |
+| Service | Port | Description |
+|---|---|---|
+| `redis` | 6379 | Message broker |
+| `api` | 8000 | Google Shopping API |
+| `worker` | -- | Google Shopping Celery worker |
+| `grailed-api` | 8001 | Grailed API |
+| `grailed-worker` | -- | Grailed Celery worker |
+| `vestiaire-api` | 8002 | Vestiaire Collective API |
+| `vestiaire-worker` | -- | Vestiaire Celery worker |
+| `rebag-api` | 8003 | Rebag API |
+| `rebag-worker` | -- | Rebag Celery worker |
+| `farfetch-api` | 8004 | Farfetch API |
+| `farfetch-worker` | -- | Farfetch Celery worker |
+| `fashionphile-api` | 8005 | Fashionphile API |
+| `fashionphile-worker` | -- | Fashionphile Celery worker |
+| `secondstreet-api` | 8006 | 2nd Street USA API |
+| `secondstreet-worker` | -- | 2nd Street Celery worker |
+
+### Snowflake Schemas
+
+Each marketplace has its own schema inside the `RETAIL_ANALYZER` database:
+
+| Schema | Tables |
+|---|---|
+| `GOOGLE_SHOPPING` | SEARCH_QUERIES, SCRAPE_RUNS, PRODUCTS, PRODUCT_QUERIES |
+| `GRAILED` | SEARCH_QUERIES, SCRAPE_RUNS, PRODUCTS, PRODUCT_QUERIES |
+| `VESTIAIRE` | SEARCH_QUERIES, SCRAPE_RUNS, PRODUCTS, PRODUCT_QUERIES |
+| `REBAG` | SEARCH_QUERIES, SCRAPE_RUNS, PRODUCTS, PRODUCT_QUERIES |
+| `FARFETCH` | SEARCH_QUERIES, SCRAPE_RUNS, PRODUCTS, PRODUCT_QUERIES |
+| `FASHIONPHILE` | SEARCH_QUERIES, SCRAPE_RUNS, PRODUCTS, PRODUCT_QUERIES |
+| `SECOND_STREET` | SEARCH_QUERIES, SCRAPE_RUNS, PRODUCTS, PRODUCT_QUERIES |
+
+Each schema also has `PRODUCT_IMAGES` and `SCRAPE_DATA` stages, a `JSON_FORMAT` file format, and a `PRODUCTS_ANALYSIS` view.
 
 ### Environment Variables
 
@@ -307,14 +333,13 @@ The `verify_products` DAG runs daily and calls the API's `/verify` endpoint over
 | `SNOWFLAKE_WAREHOUSE` | Snowflake warehouse name | required |
 | `SNOWFLAKE_ROLE` | Snowflake role | optional |
 | `REDIS_URL` | Redis connection URL | `redis://redis:6379/0` |
-| `RETAIL_API_URL` | API URL for Airflow to call (override for cross-cloud) | `http://api:8000` |
-| `VERIFY_INTERVAL_HOURS` | Hours between auto-verification runs (Celery Beat) | `24` |
-| `VERIFY_STALE_DAYS` | Days before a query is considered stale | `7` |
 
 ## Notes
 
-- A visible browser window will briefly appear during local scraping (intentional — headed mode bypasses Google's bot detection). Docker containers use a virtual framebuffer (Xvfb) for the same effect without a display.
-- Products without a valid merchant link are automatically excluded from results and Snowflake.
-- The scraper auto-detects Google Shopping's product card CSS selectors, with fallback heuristics if Google rotates class names.
-- The first run may be slower as it sets up the browser profile.
+- A visible browser window will briefly appear during local scraping (intentional -- headed mode bypasses bot detection). Docker containers use a virtual framebuffer (Xvfb) for the same effect without a display.
+- Products without a valid link are automatically excluded from results and Snowflake.
+- The Google Shopping scraper auto-detects product card CSS selectors with fallback heuristics.
+- Grailed uses its Algolia-backed API via the `grailed_api` package (no browser needed).
+- 2nd Street USA tries the Shopify JSON search endpoint first for speed, falling back to Playwright if unavailable.
+- The first run for each marketplace may be slower as it sets up the browser profile.
 - If you get CAPTCHA pages, wait a few minutes and try again with higher delays.

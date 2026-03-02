@@ -9,70 +9,192 @@ services:
       timeout: 3s
       retries: 3
 
-  api:
-    build: .
-    command: uvicorn api.server:app --host 0.0.0.0 --port 8000
+  # ── Google Shopping ─────────────────────────────────────────
+
+  google-shopping-api:
+    build:
+      context: .
+      dockerfile: google_shopping/Dockerfile
+    command: uvicorn google_shopping.server:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     env_file: .env
     depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ${SNOWFLAKE_PRIVATE_KEY_PATH:-~/.ssh/snowflake_rsa_key.p8}:/secrets/snowflake_key.p8:ro
-    environment:
-      - SNOWFLAKE_PRIVATE_KEY_PATH=/secrets/snowflake_key.p8
-      - REDIS_URL=redis://redis:6379/0
+      redis: { condition: service_healthy }
 
-  worker:
-    build: .
+  google-shopping-worker:
+    build:
+      context: .
+      dockerfile: google_shopping/Dockerfile
     command: >
       bash -c "
         Xvfb :99 -screen 0 1280x900x24 -nolisten tcp &
         sleep 1 &&
         export DISPLAY=:99 &&
-        celery -A api.tasks worker --loglevel=info --concurrency=2
+        celery -A google_shopping.tasks worker --loglevel=info --concurrency=1 --pool=solo -Q google_shopping
       "
     env_file: .env
     depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ${SNOWFLAKE_PRIVATE_KEY_PATH:-~/.ssh/snowflake_rsa_key.p8}:/secrets/snowflake_key.p8:ro
-    environment:
-      - SNOWFLAKE_PRIVATE_KEY_PATH=/secrets/snowflake_key.p8
-      - REDIS_URL=redis://redis:6379/0
+      redis: { condition: service_healthy }
 
-  beat:
-    build: .
-    command: celery -A api.tasks beat --loglevel=info
-    env_file: .env
-    depends_on:
-      redis:
-        condition: service_healthy
-    environment:
-      - REDIS_URL=redis://redis:6379/0
+  # ── Grailed ─────────────────────────────────────────────────
 
-  airflow:
+  grailed-api:
     build:
       context: .
-      dockerfile: Dockerfile.airflow
+      dockerfile: grailed/Dockerfile
+    command: uvicorn grailed.server:app --host 0.0.0.0 --port 8000
     ports:
-      - "8080:8080"
+      - "8001:8000"
     env_file: .env
     depends_on:
-      api:
-        condition: service_started
-    volumes:
-      - ./dags:/app/dags
-      - airflow-data:/app/airflow-data
-    environment:
-      - AIRFLOW_HOME=/app/airflow-data
-      - AIRFLOW__CORE__DAGS_FOLDER=/app/dags
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=sqlite:////app/airflow-data/airflow.db
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__API__SECRET_KEY=change-me-in-production
+      redis: { condition: service_healthy }
 
-volumes:
-  airflow-data:
+  grailed-worker:
+    build:
+      context: .
+      dockerfile: grailed/Dockerfile
+    command: celery -A grailed.tasks worker --loglevel=info --concurrency=1 --pool=solo -Q grailed
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  # ── Vestiaire Collective ────────────────────────────────────
+
+  vestiaire-api:
+    build:
+      context: .
+      dockerfile: vestiaire/Dockerfile
+    command: uvicorn vestiaire.server:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8002:8000"
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  vestiaire-worker:
+    build:
+      context: .
+      dockerfile: vestiaire/Dockerfile
+    command: >
+      bash -c "
+        Xvfb :99 -screen 0 1280x900x24 -nolisten tcp &
+        sleep 1 &&
+        export DISPLAY=:99 &&
+        celery -A vestiaire.tasks worker --loglevel=info --concurrency=1 --pool=solo -Q vestiaire
+      "
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  # ── Rebag ───────────────────────────────────────────────────
+
+  rebag-api:
+    build:
+      context: .
+      dockerfile: rebag/Dockerfile
+    command: uvicorn rebag.server:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8003:8000"
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  rebag-worker:
+    build:
+      context: .
+      dockerfile: rebag/Dockerfile
+    command: >
+      bash -c "
+        Xvfb :99 -screen 0 1280x900x24 -nolisten tcp &
+        sleep 1 &&
+        export DISPLAY=:99 &&
+        celery -A rebag.tasks worker --loglevel=info --concurrency=1 --pool=solo -Q rebag
+      "
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  # ── Farfetch ────────────────────────────────────────────────
+
+  farfetch-api:
+    build:
+      context: .
+      dockerfile: farfetch/Dockerfile
+    command: uvicorn farfetch.server:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8004:8000"
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  farfetch-worker:
+    build:
+      context: .
+      dockerfile: farfetch/Dockerfile
+    command: >
+      bash -c "
+        Xvfb :99 -screen 0 1280x900x24 -nolisten tcp &
+        sleep 1 &&
+        export DISPLAY=:99 &&
+        celery -A farfetch.tasks worker --loglevel=info --concurrency=1 --pool=solo -Q farfetch
+      "
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  # ── Fashionphile ────────────────────────────────────────────
+
+  fashionphile-api:
+    build:
+      context: .
+      dockerfile: fashionphile/Dockerfile
+    command: uvicorn fashionphile.server:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8005:8000"
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  fashionphile-worker:
+    build:
+      context: .
+      dockerfile: fashionphile/Dockerfile
+    command: >
+      bash -c "
+        Xvfb :99 -screen 0 1280x900x24 -nolisten tcp &
+        sleep 1 &&
+        export DISPLAY=:99 &&
+        celery -A fashionphile.tasks worker --loglevel=info --concurrency=1 --pool=solo -Q fashionphile
+      "
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  # ── 2nd Street USA ──────────────────────────────────────────
+
+  secondstreet-api:
+    build:
+      context: .
+      dockerfile: secondstreet/Dockerfile
+    command: uvicorn secondstreet.server:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8006:8000"
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+
+  secondstreet-worker:
+    build:
+      context: .
+      dockerfile: secondstreet/Dockerfile
+    command: >
+      bash -c "
+        Xvfb :99 -screen 0 1280x900x24 -nolisten tcp &
+        sleep 1 &&
+        export DISPLAY=:99 &&
+        celery -A secondstreet.tasks worker --loglevel=info --concurrency=1 --pool=solo -Q secondstreet
+      "
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
