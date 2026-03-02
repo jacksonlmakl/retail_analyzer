@@ -1,0 +1,103 @@
+-- ============================================================
+-- Migration 003: Normalize search queries
+-- ============================================================
+-- Creates SEARCH_QUERIES lookup + PRODUCT_QUERIES junction table,
+-- migrates SCRAPE_RUNS.SEARCH_QUERY -> SCRAPE_RUNS.QUERY_ID,
+-- and drops the old denormalized columns.
+-- ============================================================
+
+USE DATABASE RETAIL_ANALYZER;
+USE SCHEMA GOOGLE_SHOPPING;
+
+-- 1. Create the lookup table
+CREATE TABLE IF NOT EXISTS SEARCH_QUERIES (
+    QUERY_ID          NUMBER AUTOINCREMENT PRIMARY KEY,
+    QUERY_TEXT        VARCHAR(500)   NOT NULL,
+    FIRST_SEARCHED_AT TIMESTAMP_NTZ  DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT UQ_QUERY_TEXT UNIQUE (QUERY_TEXT)
+);
+
+-- 2. Backfill unique queries from existing SCRAPE_RUNS
+INSERT INTO SEARCH_QUERIES (QUERY_TEXT, FIRST_SEARCHED_AT)
+SELECT DISTINCT
+    SEARCH_QUERY,
+    MIN(SCRAPED_AT)
+FROM SCRAPE_RUNS
+WHERE SEARCH_QUERY IS NOT NULL
+GROUP BY SEARCH_QUERY;
+
+-- 3. Add QUERY_ID column to SCRAPE_RUNS
+ALTER TABLE SCRAPE_RUNS ADD COLUMN IF NOT EXISTS QUERY_ID NUMBER;
+
+-- 4. Backfill QUERY_ID on SCRAPE_RUNS
+UPDATE SCRAPE_RUNS r
+SET r.QUERY_ID = sq.QUERY_ID
+FROM SEARCH_QUERIES sq
+WHERE r.SEARCH_QUERY = sq.QUERY_TEXT
+  AND r.QUERY_ID IS NULL;
+
+-- 5. Create junction table
+CREATE TABLE IF NOT EXISTS PRODUCT_QUERIES (
+    PRODUCT_ID    NUMBER NOT NULL REFERENCES PRODUCTS(PRODUCT_ID),
+    QUERY_ID      NUMBER NOT NULL REFERENCES SEARCH_QUERIES(QUERY_ID),
+    FOUND_AT      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    PRIMARY KEY (PRODUCT_ID, QUERY_ID)
+);
+
+-- 6. Backfill PRODUCT_QUERIES from existing data
+--    Each product gets linked to the query from its scrape run
+INSERT INTO PRODUCT_QUERIES (PRODUCT_ID, QUERY_ID, FOUND_AT)
+SELECT
+    p.PRODUCT_ID,
+    r.QUERY_ID,
+    p.LOADED_AT
+FROM PRODUCTS p
+JOIN SCRAPE_RUNS r ON p.RUN_ID = r.RUN_ID
+WHERE r.QUERY_ID IS NOT NULL;
+
+-- 7. Drop old denormalized columns (run these after verifying data)
+-- ALTER TABLE SCRAPE_RUNS DROP COLUMN IF EXISTS SEARCH_QUERY;
+-- ALTER TABLE PRODUCTS DROP COLUMN IF EXISTS SEARCH_QUERY;
+--
+-- Uncomment the above two lines once you've confirmed the migration
+-- worked. Keeping them commented so you can verify before dropping.
+
+-- 8. Recreate the view to use the new join path
+CREATE OR REPLACE VIEW PRODUCTS_ANALYSIS AS
+SELECT
+    p.PRODUCT_ID,
+    p.RUN_ID,
+    sq.QUERY_ID,
+    sq.QUERY_TEXT AS SEARCH_QUERY,
+    r.SCRAPED_AT,
+    p.TITLE,
+    p.PRICE,
+    p.PRICE_NUMERIC,
+    p.ORIGINAL_PRICE,
+    p.ORIGINAL_PRICE_NUMERIC,
+    p.DISCOUNT,
+    CASE
+        WHEN p.ORIGINAL_PRICE_NUMERIC > 0 AND p.PRICE_NUMERIC > 0
+        THEN ROUND((1 - p.PRICE_NUMERIC / p.ORIGINAL_PRICE_NUMERIC) * 100, 1)
+    END AS DISCOUNT_PCT,
+    p.SELLER,
+    p.RATING,
+    p.RATING_NUMERIC,
+    p.REVIEWS,
+    CASE
+        WHEN p.REVIEWS LIKE '%K' THEN TRY_CAST(REPLACE(p.REVIEWS, 'K', '') AS NUMBER) * 1000
+        WHEN p.REVIEWS LIKE '%M' THEN TRY_CAST(REPLACE(p.REVIEWS, 'M', '') AS NUMBER) * 1000000
+        ELSE TRY_CAST(p.REVIEWS AS NUMBER)
+    END AS REVIEWS_NUMERIC,
+    p.LINK,
+    p.IMAGE_PATH,
+    p.IMAGE_STAGE_PATH,
+    BUILD_SCOPED_FILE_URL(@PRODUCT_IMAGES, p.IMAGE_STAGE_PATH) AS IMAGE_URL,
+    p.SHIPPING,
+    p.IS_ACTIVE,
+    p.LAST_VERIFIED_AT,
+    p.PRICE_UPDATED_AT,
+    p.LOADED_AT
+FROM PRODUCTS p
+JOIN SCRAPE_RUNS r ON p.RUN_ID = r.RUN_ID
+JOIN SEARCH_QUERIES sq ON r.QUERY_ID = sq.QUERY_ID;

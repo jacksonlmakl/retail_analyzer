@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+env/
+venv/
+.venv/
+
+# Scraper output
+output/
+
+# Secrets
+.env.sh
+*.p8
+*.pem
+
+# Browser profile
+.cache/
+
+# Airflow
+airflow-data/
+logs/
+*.pid
+
+# Docker
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+
+#Git
+personal
+personal.pub

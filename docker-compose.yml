@@ -1,0 +1,78 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  api:
+    build: .
+    command: uvicorn api.server:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ${SNOWFLAKE_PRIVATE_KEY_PATH:-~/.ssh/snowflake_rsa_key.p8}:/secrets/snowflake_key.p8:ro
+    environment:
+      - SNOWFLAKE_PRIVATE_KEY_PATH=/secrets/snowflake_key.p8
+      - REDIS_URL=redis://redis:6379/0
+
+  worker:
+    build: .
+    command: >
+      bash -c "
+        Xvfb :99 -screen 0 1280x900x24 -nolisten tcp &
+        sleep 1 &&
+        export DISPLAY=:99 &&
+        celery -A api.tasks worker --loglevel=info --concurrency=2
+      "
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ${SNOWFLAKE_PRIVATE_KEY_PATH:-~/.ssh/snowflake_rsa_key.p8}:/secrets/snowflake_key.p8:ro
+    environment:
+      - SNOWFLAKE_PRIVATE_KEY_PATH=/secrets/snowflake_key.p8
+      - REDIS_URL=redis://redis:6379/0
+
+  beat:
+    build: .
+    command: celery -A api.tasks beat --loglevel=info
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    ports:
+      - "8080:8080"
+    env_file: .env
+    depends_on:
+      api:
+        condition: service_started
+    volumes:
+      - ./dags:/app/dags
+      - airflow-data:/app/airflow-data
+    environment:
+      - AIRFLOW_HOME=/app/airflow-data
+      - AIRFLOW__CORE__DAGS_FOLDER=/app/dags
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=sqlite:////app/airflow-data/airflow.db
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__API__SECRET_KEY=change-me-in-production
+
+volumes:
+  airflow-data:
