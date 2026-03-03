@@ -1,0 +1,446 @@
+spec:
+  containers:
+
+    # ── Redis (shared message broker) ───────────────────────────
+    - name: redis
+      image: /retail_analyzer/images/repo/redis:7-alpine
+      command:
+        - redis-server
+      resources:
+        requests:
+          cpu: "0.1"
+          memory: "256M"
+        limits:
+          cpu: "0.5"
+          memory: "512M"
+
+    # ── Google Shopping ─────────────────────────────────────────
+    - name: google-shopping-api
+      image: /retail_analyzer/images/repo/google-shopping:latest
+      command:
+        - uvicorn
+        - google_shopping.server:app
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8000"
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.2"
+          memory: "512M"
+        limits:
+          cpu: "1"
+          memory: "1G"
+
+    - name: google-shopping-worker
+      image: /retail_analyzer/images/repo/google-shopping:latest
+      command:
+        - bash
+        - -c
+        - >-
+          Xvfb :99 -screen 0 1280x900x24 -nolisten tcp -nolisten unix &
+          sleep 1 &&
+          export DISPLAY=:99 &&
+          celery -A google_shopping.tasks worker
+          --loglevel=info --concurrency=1 --pool=solo
+          -Q google_shopping -n google_shopping@%h
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.5"
+          memory: "2G"
+        limits:
+          cpu: "2"
+          memory: "4G"
+
+    # ── Grailed ─────────────────────────────────────────────────
+    - name: grailed-api
+      image: /retail_analyzer/images/repo/grailed:latest
+      command:
+        - uvicorn
+        - grailed.server:app
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8001"
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.2"
+          memory: "512M"
+        limits:
+          cpu: "1"
+          memory: "1G"
+
+    - name: grailed-worker
+      image: /retail_analyzer/images/repo/grailed:latest
+      command:
+        - celery
+        - -A
+        - grailed.tasks
+        - worker
+        - --loglevel=info
+        - --concurrency=1
+        - --pool=solo
+        - -Q
+        - grailed
+        - -n
+        - grailed@%h
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.2"
+          memory: "512M"
+        limits:
+          cpu: "1"
+          memory: "1G"
+
+    # ── Vestiaire Collective ────────────────────────────────────
+    - name: vestiaire-api
+      image: /retail_analyzer/images/repo/vestiaire:latest
+      command:
+        - uvicorn
+        - vestiaire.server:app
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8002"
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.2"
+          memory: "512M"
+        limits:
+          cpu: "1"
+          memory: "1G"
+
+    - name: vestiaire-worker
+      image: /retail_analyzer/images/repo/vestiaire:latest
+      command:
+        - bash
+        - -c
+        - >-
+          Xvfb :100 -screen 0 1280x900x24 -nolisten tcp -nolisten unix &
+          sleep 1 &&
+          export DISPLAY=:100 &&
+          celery -A vestiaire.tasks worker
+          --loglevel=info --concurrency=1 --pool=solo
+          -Q vestiaire -n vestiaire@%h
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.5"
+          memory: "2G"
+        limits:
+          cpu: "2"
+          memory: "4G"
+
+    # ── Rebag ───────────────────────────────────────────────────
+    - name: rebag-api
+      image: /retail_analyzer/images/repo/rebag:latest
+      command:
+        - uvicorn
+        - rebag.server:app
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8003"
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.2"
+          memory: "512M"
+        limits:
+          cpu: "1"
+          memory: "1G"
+
+    - name: rebag-worker
+      image: /retail_analyzer/images/repo/rebag:latest
+      command:
+        - bash
+        - -c
+        - >-
+          Xvfb :101 -screen 0 1280x900x24 -nolisten tcp -nolisten unix &
+          sleep 1 &&
+          export DISPLAY=:101 &&
+          celery -A rebag.tasks worker
+          --loglevel=info --concurrency=1 --pool=solo
+          -Q rebag -n rebag@%h
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.5"
+          memory: "2G"
+        limits:
+          cpu: "2"
+          memory: "4G"
+
+    # ── Farfetch ────────────────────────────────────────────────
+    - name: farfetch-api
+      image: /retail_analyzer/images/repo/farfetch:latest
+      command:
+        - uvicorn
+        - farfetch.server:app
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8004"
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.2"
+          memory: "512M"
+        limits:
+          cpu: "1"
+          memory: "1G"
+
+    - name: farfetch-worker
+      image: /retail_analyzer/images/repo/farfetch:latest
+      command:
+        - bash
+        - -c
+        - >-
+          Xvfb :102 -screen 0 1280x900x24 -nolisten tcp -nolisten unix &
+          sleep 1 &&
+          export DISPLAY=:102 &&
+          celery -A farfetch.tasks worker
+          --loglevel=info --concurrency=1 --pool=solo
+          -Q farfetch -n farfetch@%h
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.5"
+          memory: "2G"
+        limits:
+          cpu: "2"
+          memory: "4G"
+
+    # ── Fashionphile ────────────────────────────────────────────
+    - name: fashionphile-api
+      image: /retail_analyzer/images/repo/fashionphile:latest
+      command:
+        - uvicorn
+        - fashionphile.server:app
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8005"
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.2"
+          memory: "512M"
+        limits:
+          cpu: "1"
+          memory: "1G"
+
+    - name: fashionphile-worker
+      image: /retail_analyzer/images/repo/fashionphile:latest
+      command:
+        - bash
+        - -c
+        - >-
+          Xvfb :103 -screen 0 1280x900x24 -nolisten tcp -nolisten unix &
+          sleep 1 &&
+          export DISPLAY=:103 &&
+          celery -A fashionphile.tasks worker
+          --loglevel=info --concurrency=1 --pool=solo
+          -Q fashionphile -n fashionphile@%h
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.5"
+          memory: "2G"
+        limits:
+          cpu: "2"
+          memory: "4G"
+
+    # ── 2nd Street USA ──────────────────────────────────────────
+    - name: secondstreet-api
+      image: /retail_analyzer/images/repo/secondstreet:latest
+      command:
+        - uvicorn
+        - secondstreet.server:app
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8006"
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.2"
+          memory: "512M"
+        limits:
+          cpu: "1"
+          memory: "1G"
+
+    - name: secondstreet-worker
+      image: /retail_analyzer/images/repo/secondstreet:latest
+      command:
+        - bash
+        - -c
+        - >-
+          Xvfb :104 -screen 0 1280x900x24 -nolisten tcp -nolisten unix &
+          sleep 1 &&
+          export DISPLAY=:104 &&
+          celery -A secondstreet.tasks worker
+          --loglevel=info --concurrency=1 --pool=solo
+          -Q secondstreet -n secondstreet@%h
+      env:
+        REDIS_URL: redis://localhost:6379/0
+        SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
+        SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
+        SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+        SNOWFLAKE_ROLE: "SYSADMIN"
+      secrets:
+        - snowflakeSecret: RETAIL_ANALYZER.PUBLIC.SNOWFLAKE_KEY
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY_B64
+      resources:
+        requests:
+          cpu: "0.5"
+          memory: "2G"
+        limits:
+          cpu: "2"
+          memory: "4G"
+
+  endpoints:
+    - name: google-shopping
+      port: 8000
+      public: true
+    - name: grailed
+      port: 8001
+      public: true
+    - name: vestiaire
+      port: 8002
+      public: true
+    - name: rebag
+      port: 8003
+      public: true
+    - name: farfetch
+      port: 8004
+      public: true
+    - name: fashionphile
+      port: 8005
+      public: true
+    - name: secondstreet
+      port: 8006
+      public: true

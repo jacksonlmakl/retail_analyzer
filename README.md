@@ -334,6 +334,154 @@ Each schema also has `PRODUCT_IMAGES` and `SCRAPE_DATA` stages, a `JSON_FORMAT` 
 | `SNOWFLAKE_ROLE` | Snowflake role | optional |
 | `REDIS_URL` | Redis connection URL | `redis://redis:6379/0` |
 
+## Snowflake Container Services (SPCS) Deployment
+
+Deploy all marketplace APIs as a single SPCS service running inside Snowflake. All 7 API servers, 7 Celery workers, and Redis run as containers on a managed compute pool.
+
+### Architecture
+
+```
+                      ┌─────────────────────────────────────────┐
+                      │        SPCS Service (1 pod)             │
+                      │                                         │
+ Internet ──▶ ingress │  redis ◀──▶ 7 APIs + 7 workers         │──▶ Marketplace sites
+                      │  (localhost network, like docker-compose)│
+                      └─────────────────────────────────────────┘
+```
+
+### Prerequisites
+
+- Snowflake account with ACCOUNTADMIN access
+- Docker Desktop with buildx (for cross-platform `linux/amd64` builds)
+- [Snowflake CLI](https://docs.snowflake.com/en/developer-guide/snowflake-cli/index) (`pip install snowflake-cli`)
+- RSA key pair registered with your Snowflake user (see [Snowflake Prerequisites](#snowflake-prerequisites) above)
+
+### Step 1: Configure Snowflake CLI
+
+Create `~/.snowflake/config.toml` with a connection named `retail`:
+
+```toml
+[connections.retail]
+account = "<ORG>-<ACCOUNT>"
+user = "<YOUR_USER>"
+authenticator = "SNOWFLAKE_JWT"
+private_key_file = "~/.ssh/snowflake_rsa_key.p8"
+role = "ACCOUNTADMIN"
+warehouse = "COMPUTE_WH"
+database = "RETAIL_ANALYZER"
+```
+
+### Step 2: Run Setup SQL
+
+Run `spcs/setup.sql` in a Snowflake worksheet (as ACCOUNTADMIN). This creates everything:
+
+- Database + all 7 marketplace schemas (tables, stages, views)
+- Image repository (`RETAIL_ANALYZER.IMAGES.REPO`)
+- Compute pool (`SCRAPER_POOL` — CPU_X64_M, 6 vCPU / 24 GB)
+- Network egress rules for all marketplace sites, CDNs, and APIs
+- External access integration
+- Network policy allowing ingress to SPCS endpoints
+- Snowflake secret for private key auth inside containers
+
+**Before running**, replace these placeholders:
+
+1. `<PASTE_YOUR_BASE64_PRIVATE_KEY_HERE>` — generate with:
+
+```bash
+base64 -i ~/.ssh/snowflake_rsa_key.p8 | tr -d '\n'
+```
+
+2. The S3 hostname in the network rule (`sfc-prod3-ds1-176-customer-stage.s3.amazonaws.com`) is account-specific. If PUT operations fail inside containers, check worker logs for the actual hostname and update the rule.
+
+### Step 3: Edit the Service Spec
+
+In `spcs/retail-analyzer.yaml`, replace all instances of:
+
+- `<YOUR_SNOWFLAKE_ACCOUNT>` with your Snowflake account identifier (e.g., `BCB91379`)
+- `<YOUR_SNOWFLAKE_USER>` with your Snowflake username
+
+### Step 4: Build and Push Images
+
+```bash
+# Get your registry URL from the setup.sql output:
+#   SHOW IMAGE REPOSITORIES IN SCHEMA RETAIL_ANALYZER.IMAGES;
+export REGISTRY="orgname-acctname.registry.snowflakecomputing.com/retail_analyzer/images/repo"
+
+bash spcs/deploy.sh
+```
+
+This builds all 7 marketplace images + Redis for `linux/amd64`, pushes them to the Snowflake image repository, and uploads the service spec YAML to the `SPCS_SPECS` stage.
+
+### Step 5: Create the Service
+
+Run `spcs/create-service.sql` in a Snowflake worksheet. Wait ~2 minutes, then check:
+
+```sql
+SELECT SYSTEM$GET_SERVICE_STATUS('RETAIL_ANALYZER.PUBLIC.RETAIL_ANALYZER_SVC');
+SHOW ENDPOINTS IN SERVICE RETAIL_ANALYZER.PUBLIC.RETAIL_ANALYZER_SVC;
+```
+
+### Step 6: Create a Programmatic Access Token (PAT)
+
+SPCS public endpoints require authentication. Create a PAT in the Snowflake web UI:
+
+1. Go to your user profile (bottom-left) > **Programmatic Access Tokens**
+2. Create a token with the `ACCOUNTADMIN` role
+3. Add `SNOWFLAKE_PAT=<your_token>` to your `.env` file
+
+### Step 7: Use the SPCS Endpoints
+
+Copy the ingress URLs from `SHOW ENDPOINTS` into `.env` (see `.env.spcs.example`), then:
+
+```bash
+python search_all.py "louis vuitton wallet" --spcs
+```
+
+The `--spcs` flag reads `SNOWFLAKE_PAT` from `.env` and passes it as an auth header with every request.
+
+### SPCS Management
+
+```sql
+-- View container logs
+SELECT SYSTEM$GET_SERVICE_LOGS('RETAIL_ANALYZER.PUBLIC.RETAIL_ANALYZER_SVC', 0, 'rebag-worker', 100);
+
+-- Suspend (stops billing)
+ALTER SERVICE RETAIL_ANALYZER.PUBLIC.RETAIL_ANALYZER_SVC SUSPEND;
+
+-- Resume
+ALTER SERVICE RETAIL_ANALYZER.PUBLIC.RETAIL_ANALYZER_SVC RESUME;
+
+-- Redeploy after code changes:
+--   1. Rebuild + push images (deploy.sh)
+--   2. Then:
+ALTER SERVICE RETAIL_ANALYZER.PUBLIC.RETAIL_ANALYZER_SVC SUSPEND;
+ALTER SERVICE RETAIL_ANALYZER.PUBLIC.RETAIL_ANALYZER_SVC
+    FROM @RETAIL_ANALYZER.PUBLIC.SPCS_SPECS
+    SPECIFICATION_FILE = 'retail-analyzer.yaml';
+ALTER SERVICE RETAIL_ANALYZER.PUBLIC.RETAIL_ANALYZER_SVC RESUME;
+```
+
+### SPCS Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| Empty status array | Compute pool still provisioning. Wait 2-3 min and retry. |
+| 401 Unauthorized | PAT missing or expired. Regenerate and update `.env`. |
+| 403 Forbidden | Service role not granted. Run the GRANT statements in `create-service.sql`. |
+| Network policy required | The `SPCS_INGRESS_POLICY` from `setup.sql` must be applied at the account level. |
+| PUT fails (name not resolved) | Add the S3 hostname from the error to the egress network rule. |
+| Worker returns 0 products | Some marketplaces detect datacenter IPs. Run those scrapers locally instead. |
+
+### SPCS Files
+
+| File | Purpose |
+|---|---|
+| `spcs/setup.sql` | Full one-time setup (database, schemas, SPCS infra, networking, secrets) |
+| `spcs/retail-analyzer.yaml` | Service specification (15 containers + 7 public endpoints) |
+| `spcs/deploy.sh` | Build/push all Docker images + upload spec YAML |
+| `spcs/create-service.sql` | Create service + grant endpoint access |
+| `.env.spcs.example` | Template for SPCS endpoint URLs |
+
 ## Notes
 
 - A visible browser window will briefly appear during local scraping (intentional -- headed mode bypasses bot detection). Docker containers use a virtual framebuffer (Xvfb) for the same effect without a display.

@@ -9,6 +9,9 @@ Usage:
     python search_all.py "louis vuitton wallet"
     python search_all.py "gucci bag" --pages 2
     python search_all.py "prada shoes" --poll-interval 10 --timeout 300
+
+    # SPCS deployment (auto-generates Snowflake session token):
+    python search_all.py "gucci bag" --spcs
 """
 
 import argparse
@@ -54,20 +57,38 @@ def _get_api_url(env_var: str) -> str | None:
     return url.rstrip("/")
 
 
-def _submit_scrape(base_url: str, query: str, pages: int) -> str:
+def _get_spcs_token() -> str | None:
+    """Get a Snowflake PAT from env for SPCS ingress auth."""
+    token = os.environ.get("SNOWFLAKE_PAT", "").strip()
+    if token:
+        return token
+    print("[!] SNOWFLAKE_PAT not set in environment / .env file.")
+    return None
+
+
+def _build_headers(spcs_token: str | None) -> dict:
+    if spcs_token:
+        return {"Authorization": f'Snowflake Token="{spcs_token}"'}
+    return {}
+
+
+def _submit_scrape(base_url: str, query: str, pages: int, headers: dict) -> str:
     resp = requests.post(
         f"{base_url}/scrape",
         json={"query": query, "pages": pages},
+        headers=headers,
         timeout=10,
     )
     resp.raise_for_status()
     return resp.json()["task_id"]
 
 
-def _poll_task(base_url: str, task_id: str, poll_interval: float, timeout: float) -> dict:
+def _poll_task(base_url: str, task_id: str, poll_interval: float,
+               timeout: float, headers: dict) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        resp = requests.get(f"{base_url}/scrape/{task_id}", timeout=10)
+        resp = requests.get(f"{base_url}/scrape/{task_id}",
+                            headers=headers, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         status = data.get("status", "")
@@ -78,21 +99,22 @@ def _poll_task(base_url: str, task_id: str, poll_interval: float, timeout: float
 
 
 def _run_marketplace(name: str, base_url: str, query: str, pages: int,
-                     poll_interval: float, timeout: float) -> dict:
+                     poll_interval: float, timeout: float,
+                     headers: dict) -> dict:
     """Submit a scrape request and poll until completion. Returns a result dict."""
     try:
-        health = requests.get(f"{base_url}/health", timeout=5)
+        health = requests.get(f"{base_url}/health", headers=headers, timeout=5)
         if health.status_code != 200:
             return {"marketplace": name, "status": "UNREACHABLE", "error": f"Health check returned {health.status_code}"}
     except requests.RequestException as e:
         return {"marketplace": name, "status": "UNREACHABLE", "error": str(e)}
 
     try:
-        task_id = _submit_scrape(base_url, query, pages)
+        task_id = _submit_scrape(base_url, query, pages, headers)
     except requests.RequestException as e:
         return {"marketplace": name, "status": "SUBMIT_FAILED", "error": str(e)}
 
-    result = _poll_task(base_url, task_id, poll_interval, timeout)
+    result = _poll_task(base_url, task_id, poll_interval, timeout, headers)
     result["marketplace"] = name
     return result
 
@@ -107,6 +129,7 @@ def main():
     parser.add_argument("--pages", type=int, default=1, help="Pages to scrape per marketplace (default: 1)")
     parser.add_argument("--poll-interval", type=float, default=5.0, help="Seconds between status polls (default: 5)")
     parser.add_argument("--timeout", type=float, default=300.0, help="Max seconds to wait per marketplace (default: 300)")
+    parser.add_argument("--spcs", action="store_true", help="Authenticate with Snowflake session token for SPCS endpoints")
     args = parser.parse_args()
 
     apis: dict[str, str] = {}
@@ -128,6 +151,16 @@ def main():
         print("[!] No marketplace API URLs configured. Set them in .env or as environment variables.")
         sys.exit(1)
 
+    headers: dict = {}
+    if args.spcs:
+        print("[*] SPCS mode — generating Snowflake session token ...")
+        token = _get_spcs_token()
+        if not token:
+            print("[!] Could not obtain SPCS token. Exiting.")
+            sys.exit(1)
+        headers = _build_headers(token)
+        print("[+] Token acquired.\n")
+
     print(f"[*] Query: \"{args.query}\"")
     print(f"[*] Pages: {args.pages}")
     print(f"[*] Marketplaces: {len(apis)}")
@@ -138,7 +171,7 @@ def main():
         futures = {
             pool.submit(
                 _run_marketplace, name, url, args.query, args.pages,
-                args.poll_interval, args.timeout,
+                args.poll_interval, args.timeout, headers,
             ): name
             for name, url in apis.items()
         }
