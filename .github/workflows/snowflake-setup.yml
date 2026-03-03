@@ -4,18 +4,29 @@ name: "Snowflake Setup"
 # SPCS infrastructure (compute pool, networking, image repo), and secrets.
 # Run this ONCE on a new Snowflake account, then use snowflake-deploy.yml.
 #
-# Required GitHub Secrets:
+# All secrets and variables are read from the selected GitHub Environment
+# (e.g. DEV, PROD). Configure them under Settings > Environments.
+#
+# Environment Secrets:
 #   SNOWFLAKE_ACCOUNT      - Account identifier (e.g. KYVOWCP-GXB23745)
 #   SNOWFLAKE_USER         - Username
-#   SNOWFLAKE_PRIVATE_KEY  - Full PEM contents of your RSA private key file
+#   SNOWFLAKE_PRIVATE_KEY  - Base64-encoded RSA private key (.p8)
 #
-# Required GitHub Variables:
-#   SNOWFLAKE_WAREHOUSE    - Warehouse name (e.g. COMPUTE_WH)
-#   SNOWFLAKE_ROLE         - Role for containers (e.g. SYSADMIN)
+# Environment Variables:
+#   SNOWFLAKE_WAREHOUSE    - Warehouse name (default: COMPUTE_WH)
+#   SNOWFLAKE_ROLE         - Role for containers (default: SYSADMIN)
 
 on:
   workflow_dispatch:
     inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - DEV
+          - PROD
+        default: DEV
       confirm:
         description: "Type 'yes' to confirm — this creates infrastructure on your Snowflake account"
         required: true
@@ -25,6 +36,7 @@ jobs:
   setup:
     if: ${{ inputs.confirm == 'yes' }}
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     env:
       SNOWFLAKE_WAREHOUSE: ${{ vars.SNOWFLAKE_WAREHOUSE || 'COMPUTE_WH' }}
       SNOWFLAKE_ROLE: ${{ vars.SNOWFLAKE_ROLE || 'SYSADMIN' }}
@@ -38,12 +50,8 @@ jobs:
         run: |
           echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" | base64 -d > /tmp/snowflake_key.p8
           chmod 600 /tmp/snowflake_key.p8
-          echo "--- Key file debug ---"
-          echo "File size: $(wc -c < /tmp/snowflake_key.p8) bytes"
-          echo "Line count: $(wc -l < /tmp/snowflake_key.p8)"
+          echo "Key file size: $(wc -c < /tmp/snowflake_key.p8) bytes"
           echo "First line: $(head -1 /tmp/snowflake_key.p8)"
-          echo "Last line: $(tail -1 /tmp/snowflake_key.p8)"
-          echo "---"
 
       - name: Configure Snowflake connection
         run: |
@@ -59,9 +67,6 @@ jobs:
             echo 'database = "RETAIL_ANALYZER"'
           } > ~/.snowflake/config.toml
           chmod 0600 ~/.snowflake/config.toml
-          echo "--- TOML debug ---"
-          cat ~/.snowflake/config.toml | sed 's/account = .*/account = ***/' | sed 's/user = .*/user = ***/'
-          echo "---"
 
       - name: Prepare setup SQL
         run: |
@@ -75,7 +80,7 @@ jobs:
       - name: Get image repository URL
         run: |
           echo "==========================================="
-          echo "  SETUP COMPLETE"
+          echo "  SETUP COMPLETE (${{ inputs.environment }})"
           echo "==========================================="
           echo ""
           echo "Image repository info:"
@@ -83,7 +88,7 @@ jobs:
             -q "SHOW IMAGE REPOSITORIES IN SCHEMA RETAIL_ANALYZER.IMAGES"
           echo ""
           echo ">> Copy the repository_url from above and add it"
-          echo ">> as the SNOWFLAKE_REGISTRY secret in GitHub."
+          echo ">> as SNOWFLAKE_REGISTRY in your ${{ inputs.environment }} environment."
           echo ""
           echo "Then run the 'Snowflake Deploy' workflow."
 
