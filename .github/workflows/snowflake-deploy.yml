@@ -46,7 +46,7 @@ jobs:
           echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > /tmp/snowflake_key.p8
           chmod 600 /tmp/snowflake_key.p8
 
-          cat > ~/.snowflake/config.toml << EOF
+          cat > ~/.snowflake/config.toml << 'TOMLEOF'
           [connections.retail]
           account = "${{ secrets.SNOWFLAKE_ACCOUNT }}"
           user = "${{ secrets.SNOWFLAKE_USER }}"
@@ -55,7 +55,8 @@ jobs:
           role = "ACCOUNTADMIN"
           warehouse = "${SNOWFLAKE_WAREHOUSE}"
           database = "RETAIL_ANALYZER"
-          EOF
+          TOMLEOF
+          chmod 0600 ~/.snowflake/config.toml
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
