@@ -75,15 +75,55 @@ class RebagScraper:
             if page_num > 1:
                 url += f"&page={page_num}"
 
+            # Intercept the GroupBy Cloud search API to get image URLs
+            api_data: list[dict] = []
+            async def _capture_api(response):
+                if "groupbycloud.com" in response.url and response.status == 200:
+                    try:
+                        data = await response.json()
+                        api_data.extend(data.get("records", []))
+                    except Exception:
+                        pass
+
+            page.on("response", _capture_api)
             print(f"[*] Rebag page {page_num}: {url}")
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(5000)
+            page.remove_listener("response", _capture_api)
 
+            # Build image map from API data (handle -> image URL)
+            api_images: dict[str, str] = {}
+            for rec in api_data:
+                meta = rec.get("allMeta", {})
+                handle = ""
+                attrs = meta.get("attributes", {})
+                if isinstance(attrs, dict):
+                    handle_list = attrs.get("handle", {}).get("text", [])
+                    if handle_list:
+                        handle = handle_list[0]
+                images = meta.get("images", [])
+                if handle and images:
+                    img_uri = images[0].get("uri", "")
+                    if img_uri:
+                        api_images[f"/products/{handle}"] = img_uri
+
+            print(f"[*] API returned {len(api_data)} records, {len(api_images)} with images")
+
+            # Scroll to trigger DOM rendering for text extraction
             for _ in range(3):
                 await page.evaluate("window.scrollBy(0, window.innerHeight)")
-                await page.wait_for_timeout(800)
+                await page.wait_for_timeout(600)
+            await page.evaluate("window.scrollTo(0, 0)")
+            await page.wait_for_timeout(500)
 
             products = await self._extract_products(page)
+
+            # Apply API image URLs to products
+            for p in products:
+                href = p.link.replace(BASE_URL, "") if p.link.startswith(BASE_URL) else p.link
+                if href in api_images:
+                    p.image_url = api_images[href]
+
             if not products:
                 print(f"[*] No results on page {page_num}")
                 break
@@ -97,6 +137,36 @@ class RebagScraper:
 
         print(f"\n[+] Total Rebag products: {len(all_products)}")
         return all_products
+
+    async def download_images(self, products: list[Product], images_dir: Path):
+        """Download product images via full browser navigation (bypasses CDN bot detection)."""
+        images_dir.mkdir(parents=True, exist_ok=True)
+        dl_page = await self._context.new_page()
+        await dl_page.set_extra_http_headers({
+            "Referer": BASE_URL + "/",
+            "Accept": "image/webp,image/*,*/*",
+        })
+        saved = 0
+        for i, p in enumerate(products):
+            if not p.image_url or not p.image_url.startswith("http"):
+                continue
+            try:
+                resp = await dl_page.goto(p.image_url, timeout=15000, wait_until="load")
+                if resp and resp.ok:
+                    ct = resp.headers.get("content-type", "image/jpeg")
+                    ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
+                    slug = _slugify(p.title)
+                    fname = f"{i+1:03d}_{slug}{ext}" if slug else f"{i+1:03d}{ext}"
+                    fp = images_dir / fname
+                    fp.write_bytes(await resp.body())
+                    p.image_path = f"images/{fp.name}"
+                    saved += 1
+                elif resp:
+                    print(f"  [!] Image #{i+1}: HTTP {resp.status}")
+            except Exception as e:
+                print(f"  [!] Image #{i+1}: {e}")
+        await dl_page.close()
+        print(f"[+] Saved {saved} images to {images_dir}/")
 
     async def _extract_products(self, page) -> list[Product]:
         raw = await page.evaluate("""() => {
