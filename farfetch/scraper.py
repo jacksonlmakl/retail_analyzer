@@ -8,7 +8,10 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from urllib.parse import quote_plus
 
+import requests as req_lib
+
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 PROFILE_DIR = Path.home() / ".cache" / "farfetch_scraper" / "browser_profile"
 BASE_URL = "https://www.farfetch.com"
@@ -49,8 +52,14 @@ class FarfetchScraper:
             user_data_dir=str(PROFILE_DIR),
             headless=self.headless,
             viewport={"width": 1280, "height": 900},
-            args=["--disable-blink-features=AutomationControlled"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ],
         )
+        for page in self._context.pages:
+            await stealth_async(page)
+        self._context.on("page", lambda p: stealth_async(p))
 
     async def stop(self):
         if self._context:
@@ -247,6 +256,14 @@ def save_product_images(products: list[Product], output_path: str, max_seconds: 
     images_dir = output_path.parent / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
+    session = req_lib.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": BASE_URL + "/",
+        "Accept": "image/webp,image/*,*/*",
+    })
+
     saved = 0
     start = time.monotonic()
     for i, p in enumerate(products):
@@ -259,18 +276,14 @@ def save_product_images(products: list[Product], output_path: str, max_seconds: 
         slug = _slugify(p.title)
         base = f"{idx}_{slug}" if slug else idx
         try:
-            req = urllib.request.Request(p.image_url, headers={
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": BASE_URL + "/",
-                "Accept": "image/webp,image/*,*/*",
-            })
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                ct = resp.headers.get("Content-Type", "image/jpeg")
-                ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
-                fp = images_dir / f"{base}{ext}"
-                fp.write_bytes(resp.read())
-                p.image_path = f"images/{fp.name}"
-                saved += 1
+            resp = session.get(p.image_url, timeout=10)
+            resp.raise_for_status()
+            ct = resp.headers.get("Content-Type", "image/jpeg")
+            ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
+            fp = images_dir / f"{base}{ext}"
+            fp.write_bytes(resp.content)
+            p.image_path = f"images/{fp.name}"
+            saved += 1
         except Exception as e:
             print(f"  [!] Image #{i+1}: {e}")
 

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+import requests as req_lib
 import urllib.request
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -354,6 +355,14 @@ def save_product_images(products: list[Product], output_path: str):
     images_dir = output_path.parent / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
+    session = req_lib.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": BASE_URL + "/",
+        "Accept": "image/webp,image/*,*/*",
+    })
+
     saved = 0
     for i, p in enumerate(products):
         if not p.image_url or not p.image_url.startswith("http"):
@@ -362,14 +371,14 @@ def save_product_images(products: list[Product], output_path: str):
         slug = _slugify(p.title)
         base = f"{idx}_{slug}" if slug else idx
         try:
-            req = urllib.request.Request(p.image_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                ct = resp.headers.get("Content-Type", "image/jpeg")
-                ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
-                fp = images_dir / f"{base}{ext}"
-                fp.write_bytes(resp.read())
-                p.image_path = f"images/{fp.name}"
-                saved += 1
+            resp = session.get(p.image_url, timeout=10)
+            resp.raise_for_status()
+            ct = resp.headers.get("Content-Type", "image/jpeg")
+            ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
+            fp = images_dir / f"{base}{ext}"
+            fp.write_bytes(resp.content)
+            p.image_path = f"images/{fp.name}"
+            saved += 1
         except Exception as e:
             print(f"  [!] Image #{i+1}: {e}")
 

@@ -23,8 +23,6 @@ def scrape_and_load(self, query, pages=1, country="us", language="en"):
         async def _scrape():
             async with VestiaireScraper(headless=False) as scraper:
                 prods = await scraper.search(query, max_pages=pages)
-                if prods:
-                    await scraper.download_images(prods, images_dir)
                 return prods
 
         products = asyncio.run(_scrape())
@@ -32,6 +30,7 @@ def scrape_and_load(self, query, pages=1, country="us", language="en"):
         if not products:
             return {"run_id": None, "products_loaded": 0, "error": "No products found"}
 
+        save_product_images(products, str(results_path))
         save_to_json(products, str(results_path))
 
         conn = get_connection()

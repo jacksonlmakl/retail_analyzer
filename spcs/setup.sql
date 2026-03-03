@@ -552,12 +552,15 @@ CREATE OR REPLACE NETWORK RULE RETAIL_ANALYZER.PUBLIC.SCRAPER_EGRESS_RULE
         '2ndstreetusa.com:443',
         'www.2ndstreetusa.com:443',
         'ec.2ndstreetusa.com:443',
-        -- CDN / image hosts
+        -- CDN / image hosts (Shopify, Farfetch, Vestiaire, Grailed)
         'cdn.shopify.com:443',
         'cdn-images.farfetch-contents.com:443',
+        'cdn-static.farfetch-contents.com:443',
         'images.vestiairecollective.com:443',
         'images.grailed.com:443',
         'media.grailed.com:443',
+        -- Fashionphile Shopify CDN (specific store bucket)
+        'cdn.fashionphile.com:443',
         -- Rebag GroupBy API
         'proxy.rebag.groupbycloud.com:443',
         -- Grailed Algolia search API

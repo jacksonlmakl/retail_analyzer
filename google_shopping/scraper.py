@@ -19,7 +19,10 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from urllib.parse import urlencode
 
+import requests as req_lib
+
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 
 PROFILE_DIR = Path.home() / ".cache" / "google_shopping_scraper" / "browser_profile"
@@ -61,8 +64,14 @@ class GoogleShoppingScraper:
             user_data_dir=str(PROFILE_DIR),
             headless=self.headless,
             viewport={"width": 1280, "height": 900},
-            args=["--disable-blink-features=AutomationControlled"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ],
         )
+        for page in self._context.pages:
+            await stealth_async(page)
+        self._context.on("page", lambda p: stealth_async(p))
 
     async def stop(self):
         if self._context:
@@ -594,17 +603,29 @@ def _save_base64_image(data_url, images_dir, filename_base):
     return filepath
 
 
+_img_session = None
+
+def _get_img_session():
+    global _img_session
+    if _img_session is None:
+        _img_session = req_lib.Session()
+        _img_session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "image/webp,image/*,*/*",
+        })
+    return _img_session
+
 def _download_image(url, images_dir, filename_base):
-    """Download an image from a URL via a simple GET request."""
-    import urllib.request
+    """Download an image from a URL via a persistent session."""
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            content_type = resp.headers.get("Content-Type", "image/jpeg")
-            ext = MIME_TO_EXT.get(content_type.split(";")[0].strip(), ".jpg")
-            filepath = images_dir / f"{filename_base}{ext}"
-            filepath.write_bytes(resp.read())
-            return filepath
+        resp = _get_img_session().get(url, timeout=10)
+        resp.raise_for_status()
+        content_type = resp.headers.get("Content-Type", "image/jpeg")
+        ext = MIME_TO_EXT.get(content_type.split(";")[0].strip(), ".jpg")
+        filepath = images_dir / f"{filename_base}{ext}"
+        filepath.write_bytes(resp.content)
+        return filepath
     except Exception:
         return None
 

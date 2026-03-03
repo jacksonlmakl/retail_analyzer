@@ -221,15 +221,17 @@ spec:
     - name: rebag-worker
       image: /retail_analyzer/images/repo/rebag:latest
       command:
-        - bash
-        - -c
-        - >-
-          Xvfb :101 -screen 0 1280x900x24 -nolisten tcp -nolisten unix &
-          sleep 1 &&
-          export DISPLAY=:101 &&
-          celery -A rebag.tasks worker
-          --loglevel=info --concurrency=1 --pool=solo
-          -Q rebag -n rebag@%h
+        - celery
+        - -A
+        - rebag.tasks
+        - worker
+        - --loglevel=info
+        - --concurrency=1
+        - --pool=solo
+        - -Q
+        - rebag
+        - -n
+        - rebag@%h
       env:
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
@@ -242,11 +244,11 @@ spec:
           envVarName: SNOWFLAKE_PRIVATE_KEY_B64
       resources:
         requests:
-          cpu: "0.5"
-          memory: "2G"
+          cpu: "0.2"
+          memory: "512M"
         limits:
-          cpu: "2"
-          memory: "4G"
+          cpu: "1"
+          memory: "1G"
 
     # ── Farfetch ────────────────────────────────────────────────
     - name: farfetch-api
@@ -337,15 +339,17 @@ spec:
     - name: fashionphile-worker
       image: /retail_analyzer/images/repo/fashionphile:latest
       command:
-        - bash
-        - -c
-        - >-
-          Xvfb :103 -screen 0 1280x900x24 -nolisten tcp -nolisten unix &
-          sleep 1 &&
-          export DISPLAY=:103 &&
-          celery -A fashionphile.tasks worker
-          --loglevel=info --concurrency=1 --pool=solo
-          -Q fashionphile -n fashionphile@%h
+        - celery
+        - -A
+        - fashionphile.tasks
+        - worker
+        - --loglevel=info
+        - --concurrency=1
+        - --pool=solo
+        - -Q
+        - fashionphile
+        - -n
+        - fashionphile@%h
       env:
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
@@ -358,11 +362,11 @@ spec:
           envVarName: SNOWFLAKE_PRIVATE_KEY_B64
       resources:
         requests:
-          cpu: "0.5"
-          memory: "2G"
+          cpu: "0.2"
+          memory: "512M"
         limits:
-          cpu: "2"
-          memory: "4G"
+          cpu: "1"
+          memory: "1G"
 
     # ── 2nd Street USA ──────────────────────────────────────────
     - name: secondstreet-api

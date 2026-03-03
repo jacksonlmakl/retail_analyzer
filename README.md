@@ -482,6 +482,68 @@ ALTER SERVICE RETAIL_ANALYZER.PUBLIC.RETAIL_ANALYZER_SVC RESUME;
 | `spcs/create-service.sql` | Create service + grant endpoint access |
 | `.env.spcs.example` | Template for SPCS endpoint URLs |
 
+## GitHub Actions (Automated Deployment)
+
+Two workflows automate the full SPCS deployment. Set up your secrets once, then run the workflows from the Actions tab.
+
+### 1. Add GitHub Secrets and Variables
+
+Go to **Settings > Secrets and variables > Actions**.
+
+**Secrets** (sensitive values):
+
+| Secret | Description | Example |
+|---|---|---|
+| `SNOWFLAKE_ACCOUNT` | Snowflake account identifier | `KYVOWCP-GXB23745` |
+| `SNOWFLAKE_USER` | Snowflake username | `jmakl` |
+| `SNOWFLAKE_PRIVATE_KEY` | Full PEM contents of `~/.ssh/snowflake_rsa_key.p8` | `-----BEGIN PRIVATE KEY-----\n...` |
+| `SNOWFLAKE_REGISTRY` | Image repository URL (set after running Setup) | `orgname-acctname.registry.snowflakecomputing.com/retail_analyzer/images/repo` |
+
+**Variables** (non-sensitive config, under the "Variables" tab):
+
+| Variable | Description | Default |
+|---|---|---|
+| `SNOWFLAKE_WAREHOUSE` | Warehouse name | `COMPUTE_WH` |
+| `SNOWFLAKE_ROLE` | Role used by containers to connect to Snowflake | `SYSADMIN` |
+
+### 2. Run "Snowflake Setup" (one-time)
+
+Go to **Actions > Snowflake Setup > Run workflow**. Type `yes` to confirm.
+
+This runs `spcs/setup.sql` against your account, creating:
+- `RETAIL_ANALYZER` database + `COMPUTE_WH` warehouse
+- All 7 marketplace schemas with tables, stages, and views
+- Compute pool, networking, image repository, and secrets
+
+After it completes, check the workflow output for the **image repository URL** and set it as the `SNOWFLAKE_REGISTRY` secret.
+
+### 3. Run "Snowflake Deploy"
+
+Go to **Actions > Snowflake Deploy > Run workflow**. Choose `create` for first deploy or `update` for redeployments.
+
+This builds all 8 Docker images (7 marketplaces + Redis), pushes them to the Snowflake registry, substitutes your account/user/warehouse/role into the service spec, uploads it, and creates or updates the SPCS service.
+
+The workflow output will show the service status and endpoint URLs. Copy those URLs into your local `.env` file (see `.env.spcs.example`).
+
+### 4. Local Client Setup
+
+After deployment, the endpoints and PAT are for your local `search_all.py` client — they aren't part of the workflow:
+
+1. Create a PAT in the Snowflake web UI (see [Step 6](#step-6-create-a-programmatic-access-token-pat) above)
+2. Copy the endpoint URLs from the deploy workflow output
+3. Add both to your `.env` file (see `.env.spcs.example`)
+
+### Redeploying After Code Changes
+
+Just run the **Snowflake Deploy** workflow with the `update` action. It rebuilds all images, pushes them, and restarts the service with the new spec.
+
+### Workflow Files
+
+| File | Purpose |
+|---|---|
+| `.github/workflows/snowflake-setup.yml` | One-time: database + schemas + SPCS infrastructure |
+| `.github/workflows/snowflake-deploy.yml` | Build images + create/update the service |
+
 ## Notes
 
 - A visible browser window will briefly appear during local scraping (intentional -- headed mode bypasses bot detection). Docker containers use a virtual framebuffer (Xvfb) for the same effect without a display.

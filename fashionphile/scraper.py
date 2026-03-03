@@ -1,16 +1,12 @@
-"""Fashionphile scraper — Playwright-based search."""
+"""Fashionphile scraper — Shopify JSON API (no browser needed)."""
 
-import asyncio
 import json
 import re
-import urllib.request
+import requests
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import urlencode
 
-from playwright.async_api import async_playwright
-
-PROFILE_DIR = Path.home() / ".cache" / "fashionphile_scraper" / "browser_profile"
 BASE_URL = "https://www.fashionphile.com"
 
 MIME_TO_EXT = {
@@ -19,6 +15,38 @@ MIME_TO_EXT = {
     "image/jpeg": ".jpg",
     "image/gif": ".gif",
 }
+
+_SESSION_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+_CONDITION_KEYWORDS = [
+    "new", "excellent", "very good", "good", "shows wear",
+    "gently used", "fair", "pristine",
+]
+
+_KNOWN_CATEGORIES = {
+    "handbags", "wallets", "accessories", "shoes", "jewelry",
+    "watches", "belts", "scarves", "clothing", "sunglasses",
+    "backpack", "tote", "clutch", "crossbody", "shoulder-bag",
+}
+
+_KNOWN_MATERIALS = [
+    "monogram canvas", "damier ebene", "damier azur", "damier",
+    "epi leather", "empreinte leather", "vernis leather",
+    "saffiano leather", "caviar leather", "lambskin",
+    "canvas", "leather", "suede", "nylon", "denim", "tweed", "silk",
+    "patent leather", "exotic", "crocodile", "python",
+]
+
+_KNOWN_COLORS = [
+    "black", "white", "brown", "red", "blue", "green", "pink",
+    "grey", "gray", "beige", "navy", "purple", "orange", "yellow",
+    "gold", "silver", "burgundy", "camel", "cream", "multicolor",
+]
 
 
 @dataclass
@@ -37,227 +65,151 @@ class Product:
     material: str = ""
 
 
-class FashionphileScraper:
-    def __init__(self, headless=False):
-        self.headless = headless
-        self._playwright = None
-        self._context = None
+def search(query: str, max_pages: int = 1) -> list[Product]:
+    """Search Fashionphile via the Shopify JSON suggest API."""
+    session = requests.Session()
+    session.headers.update(_SESSION_HEADERS)
 
-    async def start(self):
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        self._playwright = await async_playwright().start()
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(PROFILE_DIR),
-            headless=self.headless,
-            viewport={"width": 1280, "height": 900},
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+    all_products: list[Product] = []
 
-    async def stop(self):
-        if self._context:
-            await self._context.close()
-        if self._playwright:
-            await self._playwright.stop()
+    for page_num in range(1, max_pages + 1):
+        params = {
+            "q": query,
+            "resources[type]": "product",
+            "resources[limit]": 24,
+            "page": page_num,
+        }
+        url = f"{BASE_URL}/search/suggest.json?{urlencode(params)}"
+        print(f"[*] Fashionphile Shopify JSON page {page_num}: {url}")
 
-    async def __aenter__(self):
-        await self.start()
-        return self
+        try:
+            resp = session.get(url, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            print(f"[!] Fashionphile API error: {e}")
+            break
 
-    async def __aexit__(self, *exc):
-        await self.stop()
+        raw_products = data.get("resources", {}).get("results", {}).get("products", [])
+        if not raw_products:
+            print(f"[*] No more results on page {page_num}")
+            break
 
-    async def search(self, query: str, max_pages: int = 1) -> list[Product]:
-        all_products: list[Product] = []
-        page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        for item in raw_products:
+            p = _parse_shopify_product(item)
+            if p and p.link:
+                all_products.append(p)
 
-        for page_num in range(1, max_pages + 1):
-            url = f"{BASE_URL}/search?q={quote_plus(query)}"
-            if page_num > 1:
-                url += f"&page={page_num}"
+        print(f"[+] Page {page_num}: {len(raw_products)} raw -> {len(all_products)} total")
 
-            print(f"[*] Fashionphile page {page_num}: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(4000)
+    print(f"\n[+] Total Fashionphile products: {len(all_products)}")
+    return all_products
 
-            for _ in range(3):
-                await page.evaluate("window.scrollBy(0, window.innerHeight)")
-                await page.wait_for_timeout(800)
 
-            products = await self._extract_products(page)
-            if not products:
-                print(f"[*] No results on page {page_num}")
-                break
+def _parse_shopify_product(item: dict) -> Product | None:
+    title = item.get("title", "").strip()
+    if not title:
+        return None
 
-            with_links = [p for p in products if p.link]
-            dropped = len(products) - len(with_links)
-            if dropped:
-                print(f"[*] Dropped {dropped} products without links")
-            all_products.extend(with_links)
-            print(f"[+] Page {page_num}: {len(with_links)} products with links")
+    handle = item.get("handle", "")
+    link = f"{BASE_URL}/products/{handle}" if handle else item.get("url", "")
+    if link and not link.startswith("http"):
+        link = f"{BASE_URL}{link}"
+    if not link:
+        return None
 
-        print(f"\n[+] Total Fashionphile products: {len(all_products)}")
-        return all_products
+    price_raw = item.get("price", "")
+    price = ""
+    if price_raw:
+        try:
+            price = f"${float(price_raw):,.2f}"
+        except (ValueError, TypeError):
+            price = str(price_raw)
 
-    async def _extract_products(self, page) -> list[Product]:
-        raw = await page.evaluate("""() => {
-            function bestImgSrc(el) {
-                if (!el) return '';
-                const img = el.querySelector('img.ais-hit--picture, img.fp-injected-primary-image, img');
-                if (!img) return '';
-                const cur = img.currentSrc || '';
-                if (cur.startsWith('http')) return cur;
-                if (img.src && img.src.startsWith('http')) return img.src;
-                if (img.dataset.src) return img.dataset.src;
-                return '';
-            }
+    compare_raw = item.get("compare_at_price_max", "") or item.get("compare_at_price_min", "")
+    original_price = ""
+    if compare_raw:
+        try:
+            val = float(compare_raw)
+            if val > 0:
+                original_price = f"${val:,.2f}"
+        except (ValueError, TypeError):
+            pass
 
-            const results = [];
-            const seen = new Set();
+    image_url = item.get("image", "") or ""
+    fi = item.get("featured_image", {})
+    if not image_url and isinstance(fi, dict):
+        image_url = fi.get("url", "")
+    if image_url and image_url.startswith("//"):
+        image_url = f"https:{image_url}"
 
-            // Fashionphile uses Shopify + Algolia: cards are .fp-algolia-product-card
-            const cards = document.querySelectorAll(
-                '.fp-algolia-product-card, .product-card-wrapper'
-            );
+    vendor = item.get("vendor", "")
+    product_type = item.get("type", "")
 
-            cards.forEach(card => {
-                const a = card.querySelector('a[href*="/products/"]');
-                if (!a) return;
-                const href = a.getAttribute('href') || '';
-                if (!href || seen.has(href)) return;
-                seen.add(href);
+    body = item.get("body", "") or ""
+    condition = _extract_condition_from_body(body)
 
-                const text = (card.innerText || '').trim();
-                const imgSrc = bestImgSrc(card);
-                results.push({ href, text, imgSrc });
-            });
+    category = product_type
+    color = ""
+    material = ""
 
-            // Fallback: direct link selection
-            if (results.length === 0) {
-                document.querySelectorAll('a[href*="/products/"]').forEach(a => {
-                    const href = a.getAttribute('href') || '';
-                    if (!href || seen.has(href)) return;
-                    seen.add(href);
-                    const container = a.closest('.fp-algolia-product-card, .card-wrapper, [class*="product-card"]')
-                        || a.parentElement?.parentElement || a;
-                    const text = (container.innerText || '').trim();
-                    if (text.length > 5) {
-                        const imgSrc = bestImgSrc(container) || bestImgSrc(a);
-                        results.push({ href, text, imgSrc });
-                    }
-                });
-            }
-
-            return results;
-        }""")
-
-        products = []
-        for item in raw:
-            href = item.get("href", "")
-            link = href if href.startswith("http") else f"{BASE_URL}{href}"
-            p = self._parse_card(item.get("text", ""), link)
-            if p:
-                p.image_url = item.get("imgSrc", "")
-                products.append(p)
-        return products
-
-    _CONDITION_KEYWORDS = [
-        "new", "excellent", "very good", "good", "shows wear",
-        "gently used", "fair", "pristine",
-    ]
-
-    def _parse_card(self, text: str, link: str) -> Product | None:
-        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-        if not lines:
-            return None
-
-        p = Product(link=link)
-
-        for line in lines:
-            if re.match(r'^\d+$', line):
-                continue
-
-            price_m = re.search(r'\$[\d,.]+', line)
-            if price_m:
-                if not p.price:
-                    p.price = price_m.group()
-                elif not p.original_price:
-                    p.original_price = price_m.group()
-                continue
-
-            line_l = line.lower()
-            if any(kw in line_l for kw in self._CONDITION_KEYWORDS):
-                if not p.condition:
-                    p.condition = line
-                    continue
-
-            if line_l in ("add to wishlist", "wishlist", "sale", "sold"):
-                continue
-
-            if not p.designer and len(line) < 50 and line.isupper():
-                p.designer = line
-                continue
-
-            if not p.title and len(line) > 3:
-                p.title = line
-                continue
-
-        if not p.title and p.designer:
-            p.title = p.designer
-
-        self._extract_from_url(link, p)
-
-        if p.price and p.original_price:
-            try:
-                cur = float(p.price.replace("$", "").replace(",", ""))
-                orig = float(p.original_price.replace("$", "").replace(",", ""))
-                if orig > cur:
-                    pct = round((1 - cur / orig) * 100)
-                    p.discount = f"{pct}% off"
-            except ValueError:
-                pass
-
-        return p if p.title else None
-
-    _KNOWN_CATEGORIES = {
-        "handbags", "wallets", "accessories", "shoes", "jewelry",
-        "watches", "belts", "scarves", "clothing", "sunglasses",
-        "backpack", "tote", "clutch", "crossbody", "shoulder-bag",
-    }
-
-    _KNOWN_MATERIALS = [
-        "monogram canvas", "damier ebene", "damier azur", "damier",
-        "epi leather", "empreinte leather", "vernis leather",
-        "saffiano leather", "caviar leather", "lambskin",
-        "canvas", "leather", "suede", "nylon", "denim", "tweed", "silk",
-        "patent leather", "exotic", "crocodile", "python",
-    ]
-
-    _KNOWN_COLORS = [
-        "black", "white", "brown", "red", "blue", "green", "pink",
-        "grey", "gray", "beige", "navy", "purple", "orange", "yellow",
-        "gold", "silver", "burgundy", "camel", "cream", "multicolor",
-    ]
-
-    def _extract_from_url(self, link: str, p: Product):
-        slug = link.rstrip("/").rsplit("/", 1)[-1] if "/products/" in link else ""
-        if not slug:
-            return
-        slug_lower = slug.lower()
-
-        for cat in self._KNOWN_CATEGORIES:
-            if cat in slug_lower:
-                p.category = cat.replace("-", " ").title()
-                break
-
-        for mat in self._KNOWN_MATERIALS:
+    if handle:
+        slug_lower = handle.lower()
+        for mat in _KNOWN_MATERIALS:
             if mat.replace(" ", "-") in slug_lower:
-                p.material = mat.title()
+                material = mat.title()
+                break
+        for c in _KNOWN_COLORS:
+            if f"-{c}-" in slug_lower or slug_lower.endswith(f"-{c}"):
+                color = c.title()
                 break
 
-        for color in self._KNOWN_COLORS:
-            if f"-{color}-" in slug_lower or slug_lower.startswith(color + "-"):
-                p.color = color.title()
-                break
+    if not color:
+        color = _extract_color_from_title(title)
+
+    discount = ""
+    if original_price and price:
+        try:
+            orig_val = float(original_price.replace("$", "").replace(",", ""))
+            price_val = float(price.replace("$", "").replace(",", ""))
+            if orig_val > price_val > 0:
+                pct = round((1 - price_val / orig_val) * 100)
+                discount = f"{pct}% off"
+        except (ValueError, TypeError):
+            pass
+
+    return Product(
+        title=title,
+        price=price,
+        original_price=original_price,
+        discount=discount,
+        link=link,
+        image_url=image_url,
+        designer=vendor,
+        condition=condition,
+        category=category,
+        color=color,
+        material=material,
+    )
+
+
+def _extract_condition_from_body(body: str) -> str:
+    body_lower = body.lower()
+    for kw in _CONDITION_KEYWORDS:
+        idx = body_lower.find(kw)
+        if idx != -1:
+            snippet = body[max(0, idx - 10):idx + len(kw) + 20]
+            if "condition" in snippet.lower() or idx < 100:
+                return kw.title()
+    return ""
+
+
+def _extract_color_from_title(title: str) -> str:
+    title_lower = title.lower()
+    for color in _KNOWN_COLORS:
+        if f" {color} " in f" {title_lower} ":
+            return color.title()
+    return ""
 
 
 def _slugify(text: str, max_len: int = 60) -> str:
@@ -271,6 +223,13 @@ def save_product_images(products: list[Product], output_path: str):
     images_dir = output_path.parent / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": _SESSION_HEADERS["User-Agent"],
+        "Referer": BASE_URL + "/",
+        "Accept": "image/webp,image/*,*/*",
+    })
+
     saved = 0
     for i, p in enumerate(products):
         if not p.image_url or not p.image_url.startswith("http"):
@@ -279,18 +238,14 @@ def save_product_images(products: list[Product], output_path: str):
         slug = _slugify(p.title)
         base = f"{idx}_{slug}" if slug else idx
         try:
-            req = urllib.request.Request(p.image_url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": BASE_URL + "/",
-                "Accept": "image/webp,image/*,*/*",
-            })
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                ct = resp.headers.get("Content-Type", "image/jpeg")
-                ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
-                fp = images_dir / f"{base}{ext}"
-                fp.write_bytes(resp.read())
-                p.image_path = f"images/{fp.name}"
-                saved += 1
+            resp = session.get(p.image_url, timeout=10)
+            resp.raise_for_status()
+            ct = resp.headers.get("Content-Type", "image/jpeg")
+            ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
+            fp = images_dir / f"{base}{ext}"
+            fp.write_bytes(resp.content)
+            p.image_path = f"images/{fp.name}"
+            saved += 1
         except Exception as e:
             print(f"  [!] Image #{i+1}: {e}")
 

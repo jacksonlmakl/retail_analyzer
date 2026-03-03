@@ -1,15 +1,15 @@
-"""Vestiaire Collective scraper — Playwright-based SPA scraping."""
+"""Vestiaire Collective scraper — Playwright with stealth + cloudscraper image downloads."""
 
 import asyncio
 import json
 import re
-import base64
-import urllib.request
+import cloudscraper
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from urllib.parse import quote_plus
 
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 PROFILE_DIR = Path.home() / ".cache" / "vestiaire_scraper" / "browser_profile"
 BASE_URL = "https://us.vestiairecollective.com"
@@ -52,8 +52,14 @@ class VestiaireScraper:
             user_data_dir=str(PROFILE_DIR),
             headless=self.headless,
             viewport={"width": 1280, "height": 900},
-            args=["--disable-blink-features=AutomationControlled"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ],
         )
+        for page in self._context.pages:
+            await stealth_async(page)
+        self._context.on("page", lambda p: stealth_async(p))
 
     async def stop(self):
         if self._context:
@@ -71,6 +77,7 @@ class VestiaireScraper:
     async def search(self, query: str, max_pages: int = 1) -> list[Product]:
         all_products: list[Product] = []
         page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        await stealth_async(page)
 
         for page_num in range(1, max_pages + 1):
             url = f"{BASE_URL}/search/?q={quote_plus(query)}"
@@ -81,7 +88,6 @@ class VestiaireScraper:
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(4000)
 
-            # Dismiss cookie banner
             try:
                 cookie_btn = page.locator("#popin_tc_privacy_button_2, button:has-text('Accept')")
                 if await cookie_btn.count() > 0:
@@ -90,7 +96,6 @@ class VestiaireScraper:
             except Exception:
                 pass
 
-            # Scroll to trigger lazy loading
             for _ in range(3):
                 await page.evaluate("window.scrollBy(0, window.innerHeight)")
                 await page.wait_for_timeout(800)
@@ -109,36 +114,6 @@ class VestiaireScraper:
 
         print(f"\n[+] Total Vestiaire products: {len(all_products)}")
         return all_products
-
-    async def download_images(self, products: list[Product], images_dir: Path):
-        """Download product images via full browser navigation (bypasses CDN bot detection)."""
-        images_dir.mkdir(parents=True, exist_ok=True)
-        dl_page = await self._context.new_page()
-        await dl_page.set_extra_http_headers({
-            "Referer": BASE_URL + "/",
-            "Accept": "image/webp,image/*,*/*",
-        })
-        saved = 0
-        for i, p in enumerate(products):
-            if not p.image_url or not p.image_url.startswith("http"):
-                continue
-            try:
-                resp = await dl_page.goto(p.image_url, timeout=15000, wait_until="load")
-                if resp and resp.ok:
-                    ct = resp.headers.get("content-type", "image/jpeg")
-                    ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
-                    slug = _slugify(p.title)
-                    fname = f"{i+1:03d}_{slug}{ext}" if slug else f"{i+1:03d}{ext}"
-                    fp = images_dir / fname
-                    fp.write_bytes(await resp.body())
-                    p.image_path = f"images/{fp.name}"
-                    saved += 1
-                elif resp:
-                    print(f"  [!] Image #{i+1}: HTTP {resp.status}")
-            except Exception as e:
-                print(f"  [!] Image #{i+1}: {e}")
-        await dl_page.close()
-        print(f"[+] Saved {saved} images to {images_dir}/")
 
     async def _extract_products(self, page) -> list[Product]:
         raw = await page.evaluate("""() => {
@@ -244,7 +219,6 @@ class VestiaireScraper:
         return p
 
     def _extract_from_url(self, link: str, p: Product):
-        """Extract category, color, and material from the Vestiaire URL slug."""
         path = link.split("vestiairecollective.com")[-1] if "vestiairecollective.com" in link else ""
         if not path:
             return
@@ -290,6 +264,14 @@ def save_product_images(products: list[Product], output_path: str):
     images_dir = output_path.parent / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
+    session = cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "darwin", "desktop": True}
+    )
+    session.headers.update({
+        "Referer": BASE_URL + "/",
+        "Accept": "image/webp,image/*,*/*",
+    })
+
     saved = 0
     for i, p in enumerate(products):
         if not p.image_url or not p.image_url.startswith("http"):
@@ -298,18 +280,14 @@ def save_product_images(products: list[Product], output_path: str):
         slug = _slugify(p.title)
         base = f"{idx}_{slug}" if slug else idx
         try:
-            req = urllib.request.Request(p.image_url, headers={
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": BASE_URL + "/",
-                "Accept": "image/webp,image/*,*/*",
-            })
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                ct = resp.headers.get("Content-Type", "image/jpeg")
-                ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
-                fp = images_dir / f"{base}{ext}"
-                fp.write_bytes(resp.read())
-                p.image_path = f"images/{fp.name}"
-                saved += 1
+            resp = session.get(p.image_url, timeout=15)
+            resp.raise_for_status()
+            ct = resp.headers.get("Content-Type", "image/jpeg")
+            ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
+            fp = images_dir / f"{base}{ext}"
+            fp.write_bytes(resp.content)
+            p.image_path = f"images/{fp.name}"
+            saved += 1
         except Exception as e:
             print(f"  [!] Image #{i+1}: {e}")
 
