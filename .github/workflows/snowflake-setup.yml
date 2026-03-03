@@ -38,6 +38,12 @@ jobs:
         run: |
           echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" | base64 -d > /tmp/snowflake_key.p8
           chmod 600 /tmp/snowflake_key.p8
+          echo "--- Key file debug ---"
+          echo "File size: $(wc -c < /tmp/snowflake_key.p8) bytes"
+          echo "Line count: $(wc -l < /tmp/snowflake_key.p8)"
+          echo "First line: $(head -1 /tmp/snowflake_key.p8)"
+          echo "Last line: $(tail -1 /tmp/snowflake_key.p8)"
+          echo "---"
 
       - name: Configure Snowflake connection
         run: |
@@ -53,6 +59,9 @@ jobs:
             echo 'database = "RETAIL_ANALYZER"'
           } > ~/.snowflake/config.toml
           chmod 0600 ~/.snowflake/config.toml
+          echo "--- TOML debug ---"
+          cat ~/.snowflake/config.toml | sed 's/account = .*/account = ***/' | sed 's/user = .*/user = ***/'
+          echo "---"
 
       - name: Prepare setup SQL
         run: |
