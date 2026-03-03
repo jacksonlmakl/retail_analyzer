@@ -82,6 +82,21 @@ jobs:
         env:
           REGISTRY: ${{ secrets.SNOWFLAKE_REGISTRY }}
         run: |
+          push_with_retry() {
+            local max_attempts=3
+            for attempt in $(seq 1 $max_attempts); do
+              echo "Attempt ${attempt}/${max_attempts}"
+              if "$@"; then
+                return 0
+              fi
+              echo "::warning::Attempt ${attempt} failed, retrying in 15s..."
+              sleep 15
+              snow spcs image-registry login --connection retail
+            done
+            echo "::error::Failed after ${max_attempts} attempts"
+            return 1
+          }
+
           SERVICES=(
             "google-shopping:google_shopping/Dockerfile"
             "grailed:grailed/Dockerfile"
@@ -98,7 +113,7 @@ jobs:
             TAG="${REGISTRY}/${NAME}:latest"
 
             echo "::group::Building ${NAME}"
-            docker buildx build \
+            push_with_retry docker buildx build \
               --platform linux/amd64 \
               -f "${DOCKERFILE}" \
               -t "${TAG}" \
@@ -111,12 +126,21 @@ jobs:
         env:
           REGISTRY: ${{ secrets.SNOWFLAKE_REGISTRY }}
         run: |
-          REDIS_TAG="${REGISTRY}/redis:7-alpine"
-          echo "FROM redis:7-alpine" | docker buildx build \
-            --platform linux/amd64 \
-            -t "${REDIS_TAG}" \
-            --push \
-            -
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt}/3"
+            REDIS_TAG="${REGISTRY}/redis:7-alpine"
+            if echo "FROM redis:7-alpine" | docker buildx build \
+              --platform linux/amd64 \
+              -t "${REDIS_TAG}" \
+              --push \
+              -; then
+              break
+            fi
+            echo "::warning::Attempt ${attempt} failed, retrying in 15s..."
+            sleep 15
+            snow spcs image-registry login --connection retail
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+          done
 
       - name: Generate service spec from template
         run: |
