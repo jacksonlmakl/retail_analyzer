@@ -118,6 +118,9 @@ jobs:
               -f "${DOCKERFILE}" \
               -t "${TAG}" \
               --push \
+              --cache-from type=gha,scope=${NAME} \
+              --cache-to type=gha,mode=max,scope=${NAME} \
+              --provenance=false \
               .
             echo "::endgroup::"
           done
@@ -133,6 +136,7 @@ jobs:
               --platform linux/amd64 \
               -t "${REDIS_TAG}" \
               --push \
+              --provenance=false \
               -; then
               break
             fi
