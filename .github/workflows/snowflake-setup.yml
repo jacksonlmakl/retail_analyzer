@@ -35,10 +35,8 @@ jobs:
         run: pip install snowflake-cli
 
       - name: Write private key file
-        env:
-          SF_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
         run: |
-          printenv SF_PRIVATE_KEY > /tmp/snowflake_key.p8
+          echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" | base64 -d > /tmp/snowflake_key.p8
           chmod 600 /tmp/snowflake_key.p8
 
       - name: Configure Snowflake connection
