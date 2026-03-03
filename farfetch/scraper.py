@@ -11,7 +11,7 @@ from urllib.parse import quote_plus
 import requests as req_lib
 
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+from playwright_stealth import Stealth
 
 PROFILE_DIR = Path.home() / ".cache" / "farfetch_scraper" / "browser_profile"
 BASE_URL = "https://www.farfetch.com"
@@ -57,9 +57,8 @@ class FarfetchScraper:
                 "--disable-features=IsolateOrigins,site-per-process",
             ],
         )
-        for page in self._context.pages:
-            await stealth_async(page)
-        self._context.on("page", lambda p: stealth_async(p))
+        stealth = Stealth()
+        await stealth.use_async(self._context)
 
     async def stop(self):
         if self._context:

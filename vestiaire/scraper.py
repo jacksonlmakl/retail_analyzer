@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+from playwright_stealth import Stealth
 
 PROFILE_DIR = Path.home() / ".cache" / "vestiaire_scraper" / "browser_profile"
 BASE_URL = "https://us.vestiairecollective.com"
@@ -57,9 +57,8 @@ class VestiaireScraper:
                 "--disable-features=IsolateOrigins,site-per-process",
             ],
         )
-        for page in self._context.pages:
-            await stealth_async(page)
-        self._context.on("page", lambda p: stealth_async(p))
+        stealth = Stealth()
+        await stealth.use_async(self._context)
 
     async def stop(self):
         if self._context:
@@ -77,7 +76,6 @@ class VestiaireScraper:
     async def search(self, query: str, max_pages: int = 1) -> list[Product]:
         all_products: list[Product] = []
         page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-        await stealth_async(page)
 
         for page_num in range(1, max_pages + 1):
             url = f"{BASE_URL}/search/?q={quote_plus(query)}"
