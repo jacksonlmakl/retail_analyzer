@@ -10,6 +10,7 @@ JS-rendered pages and anti-bot detection.
 
 import asyncio
 import base64
+import os
 import random
 import argparse
 import json
@@ -26,6 +27,7 @@ from playwright_stealth import Stealth
 
 
 PROFILE_DIR = Path.home() / ".cache" / "google_shopping_scraper" / "browser_profile"
+PROXY_URL = os.environ.get("PROXY_URL")
 
 
 @dataclass
@@ -60,7 +62,7 @@ class GoogleShoppingScraper:
     async def start(self):
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         self._playwright = await async_playwright().start()
-        self._context = await self._playwright.chromium.launch_persistent_context(
+        launch_opts = dict(
             user_data_dir=str(PROFILE_DIR),
             headless=self.headless,
             viewport={"width": 1280, "height": 900},
@@ -69,6 +71,9 @@ class GoogleShoppingScraper:
                 "--disable-features=IsolateOrigins,site-per-process",
             ],
         )
+        if PROXY_URL:
+            launch_opts["proxy"] = {"server": PROXY_URL}
+        self._context = await self._playwright.chromium.launch_persistent_context(**launch_opts)
         await Stealth().apply_stealth_async(self._context)
 
     async def stop(self):
@@ -607,6 +612,8 @@ def _get_img_session():
     global _img_session
     if _img_session is None:
         _img_session = req_lib.Session()
+        if PROXY_URL:
+            _img_session.proxies.update({"http": PROXY_URL, "https": PROXY_URL})
         _img_session.headers.update({
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

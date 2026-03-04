@@ -1,12 +1,16 @@
 """Grailed scraper — uses the grailed_api package (Algolia-backed)."""
 
 import json
+import os
 import re
 import requests as req_lib
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from grailed_api import GrailedAPIClient
+
+PROXY_URL = os.environ.get("PROXY_URL")
+_PROXIES = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
 
 CONDITION_MAP = {
     "is_new": "New/Never Worn",
@@ -154,6 +158,8 @@ def save_product_images(products: list[Product], output_path: str):
     images_dir.mkdir(parents=True, exist_ok=True)
 
     session = req_lib.Session()
+    if _PROXIES:
+        session.proxies.update(_PROXIES)
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

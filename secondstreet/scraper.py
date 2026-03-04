@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import re
 import requests as req_lib
 import urllib.request
@@ -12,6 +13,8 @@ from urllib.parse import quote_plus, urlencode
 from playwright.async_api import async_playwright
 
 PROFILE_DIR = Path.home() / ".cache" / "secondstreet_scraper" / "browser_profile"
+PROXY_URL = os.environ.get("PROXY_URL")
+_PROXIES = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
 BASE_URL = "https://ec.2ndstreetusa.com"
 
 MIME_TO_EXT = {
@@ -212,12 +215,15 @@ class SecondStreetScraper:
     async def start(self):
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         self._playwright = await async_playwright().start()
-        self._context = await self._playwright.chromium.launch_persistent_context(
+        launch_opts = dict(
             user_data_dir=str(PROFILE_DIR),
             headless=self.headless,
             viewport={"width": 1280, "height": 900},
             args=["--disable-blink-features=AutomationControlled"],
         )
+        if PROXY_URL:
+            launch_opts["proxy"] = {"server": PROXY_URL}
+        self._context = await self._playwright.chromium.launch_persistent_context(**launch_opts)
 
     async def stop(self):
         if self._context:
@@ -356,6 +362,8 @@ def save_product_images(products: list[Product], output_path: str):
     images_dir.mkdir(parents=True, exist_ok=True)
 
     session = req_lib.Session()
+    if _PROXIES:
+        session.proxies.update(_PROXIES)
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

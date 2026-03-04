@@ -574,7 +574,10 @@ CREATE OR REPLACE NETWORK RULE RETAIL_ANALYZER.PUBLIC.SCRAPER_EGRESS_RULE
         'playwright.azureedge.net:443',
         -- Analytics / misc (loaded by marketplace pages)
         'www.googletagmanager.com:443',
-        'www.google-analytics.com:443'
+        'www.google-analytics.com:443',
+        -- Rotating proxy (Webshare)
+        'p.webshare.io:80',
+        'p.webshare.io:443'
     );
 
 -- ── External Access Integration ─────────────────────────────

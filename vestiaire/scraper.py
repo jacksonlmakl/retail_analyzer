@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import re
 import cloudscraper
 from dataclasses import dataclass, field, asdict
@@ -12,6 +13,7 @@ from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
 PROFILE_DIR = Path.home() / ".cache" / "vestiaire_scraper" / "browser_profile"
+PROXY_URL = os.environ.get("PROXY_URL")
 BASE_URL = "https://us.vestiairecollective.com"
 
 MIME_TO_EXT = {
@@ -48,7 +50,7 @@ class VestiaireScraper:
     async def start(self):
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         self._playwright = await async_playwright().start()
-        self._context = await self._playwright.chromium.launch_persistent_context(
+        launch_opts = dict(
             user_data_dir=str(PROFILE_DIR),
             headless=self.headless,
             viewport={"width": 1280, "height": 900},
@@ -57,6 +59,9 @@ class VestiaireScraper:
                 "--disable-features=IsolateOrigins,site-per-process",
             ],
         )
+        if PROXY_URL:
+            launch_opts["proxy"] = {"server": PROXY_URL}
+        self._context = await self._playwright.chromium.launch_persistent_context(**launch_opts)
         await Stealth().apply_stealth_async(self._context)
 
     async def stop(self):
@@ -264,6 +269,8 @@ def save_product_images(products: list[Product], output_path: str):
     session = cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "darwin", "desktop": True}
     )
+    if PROXY_URL:
+        session.proxies.update({"http": PROXY_URL, "https": PROXY_URL})
     session.headers.update({
         "Referer": BASE_URL + "/",
         "Accept": "image/webp,image/*,*/*",

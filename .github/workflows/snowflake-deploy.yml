@@ -14,6 +14,7 @@ name: "Snowflake Deploy"
 #   SNOWFLAKE_USER         - Username
 #   SNOWFLAKE_PRIVATE_KEY  - Base64-encoded RSA private key (.p8)
 #   SNOWFLAKE_REGISTRY     - Image repo URL (from SHOW IMAGE REPOSITORIES)
+#   PROXY_URL              - Rotating proxy URL (e.g. http://user:pass@p.webshare.io:80)
 #
 # Environment Variables:
 #   SNOWFLAKE_WAREHOUSE    - Warehouse name (default: COMPUTE_WH)
@@ -150,6 +151,7 @@ jobs:
         run: |
           sed -i "s/<YOUR_SNOWFLAKE_ACCOUNT>/${{ secrets.SNOWFLAKE_ACCOUNT }}/g" spcs/retail-analyzer.yaml
           sed -i "s/<YOUR_SNOWFLAKE_USER>/${{ secrets.SNOWFLAKE_USER }}/g" spcs/retail-analyzer.yaml
+          sed -i "s|<PROXY_URL>|${{ secrets.PROXY_URL }}|g" spcs/retail-analyzer.yaml
           sed -i "s/COMPUTE_WH/${SNOWFLAKE_WAREHOUSE}/g" spcs/retail-analyzer.yaml
           sed -i "s/SYSADMIN/${SNOWFLAKE_ROLE}/g" spcs/retail-analyzer.yaml
 

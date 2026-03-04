@@ -1,6 +1,7 @@
 """Fashionphile scraper — Shopify JSON API (no browser needed)."""
 
 import json
+import os
 import re
 import requests
 from dataclasses import dataclass, asdict
@@ -8,6 +9,8 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 BASE_URL = "https://www.fashionphile.com"
+PROXY_URL = os.environ.get("PROXY_URL")
+_PROXIES = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
 
 MIME_TO_EXT = {
     "image/webp": ".webp",
@@ -69,6 +72,8 @@ def search(query: str, max_pages: int = 1) -> list[Product]:
     """Search Fashionphile via the Shopify JSON suggest API."""
     session = requests.Session()
     session.headers.update(_SESSION_HEADERS)
+    if _PROXIES:
+        session.proxies.update(_PROXIES)
 
     all_products: list[Product] = []
 
@@ -224,6 +229,8 @@ def save_product_images(products: list[Product], output_path: str):
     images_dir.mkdir(parents=True, exist_ok=True)
 
     session = requests.Session()
+    if _PROXIES:
+        session.proxies.update(_PROXIES)
     session.headers.update({
         "User-Agent": _SESSION_HEADERS["User-Agent"],
         "Referer": BASE_URL + "/",

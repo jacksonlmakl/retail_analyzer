@@ -25,6 +25,7 @@ spec:
         - --port
         - "8000"
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -55,6 +56,7 @@ spec:
           --loglevel=info --concurrency=1 --pool=solo
           -Q google_shopping -n google_shopping@%h
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -83,6 +85,7 @@ spec:
         - --port
         - "8001"
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -115,6 +118,7 @@ spec:
         - -n
         - grailed@%h
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -143,6 +147,7 @@ spec:
         - --port
         - "8002"
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -173,6 +178,7 @@ spec:
           --loglevel=info --concurrency=1 --pool=solo
           -Q vestiaire -n vestiaire@%h
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -201,6 +207,7 @@ spec:
         - --port
         - "8003"
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -233,6 +240,7 @@ spec:
         - -n
         - rebag@%h
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -261,6 +269,7 @@ spec:
         - --port
         - "8004"
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -291,6 +300,7 @@ spec:
           --loglevel=info --concurrency=1 --pool=solo
           -Q farfetch -n farfetch@%h
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -319,6 +329,7 @@ spec:
         - --port
         - "8005"
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -351,6 +362,7 @@ spec:
         - -n
         - fashionphile@%h
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -379,6 +391,7 @@ spec:
         - --port
         - "8006"
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
@@ -409,6 +422,7 @@ spec:
           --loglevel=info --concurrency=1 --pool=solo
           -Q secondstreet -n secondstreet@%h
       env:
+        PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
         SNOWFLAKE_ACCOUNT: "<YOUR_SNOWFLAKE_ACCOUNT>"
         SNOWFLAKE_USER: "<YOUR_SNOWFLAKE_USER>"
