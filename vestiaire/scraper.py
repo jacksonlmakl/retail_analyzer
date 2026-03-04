@@ -1,10 +1,10 @@
-"""Vestiaire Collective scraper — direct search API + cloudscraper for Cloudflare bypass."""
+"""Vestiaire Collective scraper — direct search API."""
 
 import json
 import os
 import re
 import uuid
-import cloudscraper
+import requests
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -59,11 +59,10 @@ _SEARCH_HEADERS = {
 
 def search(query: str, max_pages: int = 1) -> list[Product]:
     """Search Vestiaire via the internal search API."""
-    session = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "darwin", "desktop": True}
-    )
+    session = requests.Session()
     if _PROXIES:
         session.proxies.update(_PROXIES)
+    session.headers.update(_SEARCH_HEADERS)
 
     session_id = str(uuid.uuid4())
     device_id = str(uuid.uuid4())
@@ -201,12 +200,11 @@ def save_product_images(products: list[Product], output_path: str):
     images_dir = output_path.parent / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    session = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "darwin", "desktop": True}
-    )
+    session = requests.Session()
     if _PROXIES:
         session.proxies.update(_PROXIES)
     session.headers.update({
+        "User-Agent": _SEARCH_HEADERS["User-Agent"],
         "Referer": BASE_URL + "/",
         "Accept": "image/webp,image/*,*/*",
     })

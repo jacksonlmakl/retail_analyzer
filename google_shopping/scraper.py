@@ -140,7 +140,7 @@ class GoogleShoppingScraper:
 
             try:
                 if page_num == 0:
-                    await page.goto("https://www.google.com/", wait_until="networkidle", timeout=15000)
+                    await page.goto("https://www.google.com/", wait_until="networkidle", timeout=30000)
                     await page.wait_for_timeout(1000)
 
                 await page.goto(url, wait_until="networkidle", timeout=30000)

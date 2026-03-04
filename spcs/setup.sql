@@ -545,6 +545,7 @@ CREATE OR REPLACE NETWORK RULE RETAIL_ANALYZER.PUBLIC.SCRAPER_EGRESS_RULE
         'shopping.google.com:443',
         'www.grailed.com:443',
         'us.vestiairecollective.com:443',
+        'search.vestiairecollective.com:443',
         'shop.rebag.com:443',
         'www.rebag.com:443',
         'www.farfetch.com:443',
@@ -559,6 +560,11 @@ CREATE OR REPLACE NETWORK RULE RETAIL_ANALYZER.PUBLIC.SCRAPER_EGRESS_RULE
         'images.vestiairecollective.com:443',
         'images.grailed.com:443',
         'media.grailed.com:443',
+        'process.fs.grailed.com:443',
+        'media.vestiairecollective.com:443',
+        'lh3.googleusercontent.com:443',
+        'encrypted-tbn0.gstatic.com:443',
+        'img.2ndstreetusa.com:443',
         -- Fashionphile Shopify CDN (specific store bucket)
         'cdn.fashionphile.com:443',
         -- Rebag GroupBy API
@@ -569,6 +575,11 @@ CREATE OR REPLACE NETWORK RULE RETAIL_ANALYZER.PUBLIC.SCRAPER_EGRESS_RULE
         'mnrwefss2q-1.algolianet.com:443',
         'mnrwefss2q-2.algolianet.com:443',
         'mnrwefss2q-3.algolianet.com:443',
+        'h6k3q7u9-dsn.algolia.net:443',
+        'h6k3q7u9.algolia.net:443',
+        'h6k3q7u9-1.algolianet.com:443',
+        'h6k3q7u9-2.algolianet.com:443',
+        'h6k3q7u9-3.algolianet.com:443',
         -- Playwright browser downloads (needed on first container start)
         'cdn.playwright.dev:443',
         'playwright.azureedge.net:443',
