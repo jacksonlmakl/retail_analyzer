@@ -69,8 +69,7 @@ class GoogleShoppingScraper:
                 "--disable-features=IsolateOrigins,site-per-process",
             ],
         )
-        stealth = Stealth()
-        await stealth.use_async(self._context)
+        await Stealth().apply_stealth_async(self._context)
 
     async def stop(self):
         if self._context:
