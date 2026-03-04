@@ -99,7 +99,16 @@ class FarfetchScraper:
             url = f"{BASE_URL}/shopping/women/search/items.aspx?q={quote_plus(query)}&page={page_num}"
 
             print(f"[*] Farfetch page {page_num}: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            except Exception:
+                print(f"[!] domcontentloaded timed out, retrying with load timeout...")
+                try:
+                    await page.goto(url, wait_until="commit", timeout=60000)
+                    await page.wait_for_timeout(10000)
+                except Exception as e:
+                    print(f"[!] Navigation failed: {e}")
+                    break
             await page.wait_for_timeout(5000)
 
             # Dismiss cookie popup
