@@ -72,6 +72,8 @@ def search(query: str, max_pages: int = 1) -> list[Product]:
     """Search Fashionphile via the Shopify JSON suggest API."""
     session = requests.Session()
     session.headers.update(_SESSION_HEADERS)
+    if _PROXIES:
+        session.proxies.update(_PROXIES)
 
     all_products: list[Product] = []
 
