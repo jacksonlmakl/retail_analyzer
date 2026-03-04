@@ -162,56 +162,155 @@ class FarfetchScraper:
 
     async def _extract_products(self, page) -> list[Product]:
         raw = await page.evaluate("""() => {
+            // Try __NEXT_DATA__ first
+            const ndScript = document.querySelector('script#__NEXT_DATA__');
+            if (ndScript) {
+                try {
+                    const nd = JSON.parse(ndScript.textContent);
+                    const pp = nd?.props?.pageProps;
+                    const items = pp?.listingItems || pp?.products || pp?.initialData?.products || [];
+                    if (items.length > 0) {
+                        return { source: 'next_data', items };
+                    }
+                } catch(e) {}
+            }
+
+            // Try JSON-LD structured data
+            const ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
+            for (const s of ldScripts) {
+                try {
+                    const ld = JSON.parse(s.textContent);
+                    if (ld['@type'] === 'ItemList' && ld.itemListElement?.length > 0) {
+                        return { source: 'json_ld', items: ld.itemListElement };
+                    }
+                } catch(e) {}
+            }
+
+            // Fallback: DOM scraping with better image extraction
             function bestImgSrc(el) {
                 if (!el) return '';
-                const img = el.querySelector('img');
-                if (!img) return '';
-                const cur = img.currentSrc || '';
-                if (cur.startsWith('http')) return cur;
-                if (img.src && img.src.startsWith('http')) return img.src;
-                if (img.dataset.src) return img.dataset.src;
+                for (const img of el.querySelectorAll('img')) {
+                    const srcset = img.getAttribute('srcset') || '';
+                    if (srcset) {
+                        const best = srcset.split(',').pop().trim().split(' ')[0];
+                        if (best.startsWith('http')) return best;
+                    }
+                    const src = img.currentSrc || img.src || img.dataset.src || '';
+                    if (src.startsWith('http')) return src;
+                }
                 return '';
             }
 
             const results = [];
             const seen = new Set();
-
             const cards = document.querySelectorAll(
-                'a[href*="/shopping/"][href*="/items-"], a[data-component="ProductCardLink"]'
+                'a[href*="/shopping/"][href*="/items-"], a[data-component="ProductCardLink"], a[href*="/shopping/"][href*="item-"]'
             );
-
             cards.forEach(card => {
                 const href = card.getAttribute('href') || '';
                 if (!href || seen.has(href)) return;
                 seen.add(href);
-
-                const container = card.closest('[data-component="ProductCard"]') || card.parentElement?.parentElement || card;
+                const container = card.closest('[data-component="ProductCard"]')
+                               || card.closest('[class*="ProductCard"]')
+                               || card.parentElement?.parentElement || card;
                 const text = (container.innerText || '').trim();
-                let imgSrc = bestImgSrc(container);
-                if (!imgSrc) imgSrc = bestImgSrc(card);
-                results.push({ href, text, imgSrc });
+                const imgSrc = bestImgSrc(container) || bestImgSrc(card);
+                if (text.length > 3) results.push({ href, text, imgSrc });
             });
 
             if (results.length === 0) {
                 document.querySelectorAll('a[href]').forEach(a => {
                     const href = a.getAttribute('href') || '';
-                    if (href.match(/\\/shopping\\/.*item/) && !seen.has(href)) {
+                    if ((href.includes('/shopping/') && href.includes('item')) && !seen.has(href)) {
                         seen.add(href);
                         const container = a.closest('[data-component="ProductCard"]') || a.parentElement?.parentElement || a;
                         const text = (container.innerText || '').trim();
-                        if (text.length > 5) {
+                        if (text.length > 3) {
                             const imgSrc = bestImgSrc(container) || bestImgSrc(a);
                             results.push({ href, text, imgSrc });
                         }
                     }
                 });
             }
-
-            return results;
+            return { source: 'dom', items: results };
         }""")
 
+        if not raw or not raw.get("items"):
+            return []
+
+        source = raw["source"]
+        items = raw["items"]
+
+        if source == "next_data":
+            return self._parse_next_data(items)
+        if source == "json_ld":
+            return self._parse_json_ld(items)
+        return self._parse_dom_cards(items)
+
+    def _parse_next_data(self, items: list[dict]) -> list[Product]:
         products = []
-        for item in raw:
+        for item in items:
+            try:
+                price_data = item.get("priceInfo", item.get("price", {}))
+                price = ""
+                if isinstance(price_data, dict):
+                    price = price_data.get("finalPrice", price_data.get("formattedValue", ""))
+                    if isinstance(price, (int, float)):
+                        price = f"${price:.2f}"
+                elif isinstance(price_data, (int, float)):
+                    price = f"${price_data:.2f}"
+
+                images = item.get("images", item.get("image", []))
+                image_url = ""
+                if isinstance(images, list) and images:
+                    first = images[0]
+                    image_url = first.get("url", first.get("src", "")) if isinstance(first, dict) else str(first)
+                elif isinstance(images, str):
+                    image_url = images
+
+                p = Product(
+                    title=item.get("shortDescription", item.get("name", item.get("title", ""))),
+                    price=str(price),
+                    link=item.get("url", ""),
+                    image_url=image_url,
+                    designer=item.get("brand", {}).get("name", "") if isinstance(item.get("brand"), dict) else str(item.get("brand", "")),
+                    pre_owned="pre-owned" in str(item).lower(),
+                )
+                if p.link and not p.link.startswith("http"):
+                    p.link = f"{BASE_URL}{p.link}"
+                if p.title and p.link:
+                    products.append(p)
+            except Exception as e:
+                print(f"  [!] Farfetch next_data parse error: {e}")
+        return products
+
+    def _parse_json_ld(self, items: list[dict]) -> list[Product]:
+        products = []
+        for entry in items:
+            item = entry.get("item", entry)
+            try:
+                offers = item.get("offers", {})
+                price = offers.get("price", "") if isinstance(offers, dict) else ""
+                currency = offers.get("priceCurrency", "USD") if isinstance(offers, dict) else "USD"
+                price_str = f"${price}" if currency == "USD" and price else str(price)
+
+                p = Product(
+                    title=item.get("name", ""),
+                    price=price_str,
+                    link=item.get("url", ""),
+                    image_url=item.get("image", ""),
+                    designer=item.get("brand", {}).get("name", "") if isinstance(item.get("brand"), dict) else "",
+                    pre_owned="pre-owned" in item.get("name", "").lower(),
+                )
+                if p.title and p.link:
+                    products.append(p)
+            except Exception as e:
+                print(f"  [!] Farfetch json_ld parse error: {e}")
+        return products
+
+    def _parse_dom_cards(self, items: list[dict]) -> list[Product]:
+        products = []
+        for item in items:
             href = item.get("href", "")
             link = href if href.startswith("http") else f"{BASE_URL}{href}"
             p = self._parse_card(item.get("text", ""), link)
@@ -233,7 +332,7 @@ class FarfetchScraper:
         for line in lines:
             line_l = line.lower()
 
-            price_m = re.search(r'\$[\d,.]+', line)
+            price_m = re.search(r'[\$€£¥][\d,.]+|[\d,.]+\s*(?:USD|EUR|GBP)', line)
             if price_m:
                 if not p.price:
                     p.price = price_m.group()
@@ -246,7 +345,7 @@ class FarfetchScraper:
                 p.discount = f"{pct_m.group(1)}% off"
                 continue
 
-            if not p.designer and len(line) < 50 and not line.startswith("$"):
+            if not p.designer and len(line) < 50 and not re.match(r'^[\$€£]', line):
                 p.designer = line
                 continue
 

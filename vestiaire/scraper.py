@@ -133,22 +133,36 @@ class VestiaireScraper:
 
     async def _extract_products(self, page) -> list[Product]:
         raw = await page.evaluate("""() => {
+            // Try __NEXT_DATA__ first for structured data
+            const ndScript = document.querySelector('script#__NEXT_DATA__');
+            if (ndScript) {
+                try {
+                    const nd = JSON.parse(ndScript.textContent);
+                    const items = nd?.props?.pageProps?.products
+                              || nd?.props?.pageProps?.catalogProducts
+                              || nd?.props?.pageProps?.initialData?.products
+                              || [];
+                    if (items.length > 0) {
+                        return { source: 'next_data', items };
+                    }
+                } catch(e) {}
+            }
+
+            // Fallback: DOM scraping with better image + price extraction
             const results = [];
             const seen = new Set();
 
             function bestImgSrc(el) {
                 if (!el) return '';
-                const img = el.querySelector('img');
-                if (!img) return '';
-                let url = '';
-                if (img.src && img.src.startsWith('http')) url = img.src;
-                else if (img.currentSrc && img.currentSrc.startsWith('http')) url = img.currentSrc;
-                else if (img.dataset.src) url = img.dataset.src;
-                if (url) {
-                    url = url.replace(/w=64/, 'w=600').replace(/w=96/, 'w=600')
-                             .replace(/w=128/, 'w=600').replace(/w=256/, 'w=600');
+                for (const img of el.querySelectorAll('img')) {
+                    const src = img.currentSrc || img.src || img.dataset.src
+                             || img.getAttribute('srcset')?.split(',')[0]?.trim()?.split(' ')[0]
+                             || '';
+                    if (src.startsWith('http')) {
+                        return src.replace(/w=\\d+/, 'w=600').replace(/\\/\\d+x\\d+\\//, '/600x600/');
+                    }
                 }
-                return url;
+                return '';
             }
 
             function tryAdd(a) {
@@ -156,13 +170,10 @@ class VestiaireScraper:
                 if (!href || seen.has(href)) return;
                 if (!href.match(/\\/[\\w-]+-\\d+\\.shtml/) && !href.includes('/product/')) return;
                 seen.add(href);
-                const text = (a.innerText || '').trim();
+                const container = a.closest('[class*="product"]') || a.parentElement;
+                const text = (container?.innerText || a.innerText || '').trim();
                 if (text.length < 5) return;
-                let imgSrc = bestImgSrc(a);
-                if (!imgSrc) {
-                    const container = a.closest('[class*="product"]') || a.parentElement;
-                    imgSrc = bestImgSrc(container);
-                }
+                const imgSrc = bestImgSrc(container) || bestImgSrc(a);
                 results.push({href, text, imgSrc});
             }
 
@@ -170,11 +181,55 @@ class VestiaireScraper:
             if (results.length === 0) {
                 document.querySelectorAll('a[href]').forEach(tryAdd);
             }
-            return results;
+            return { source: 'dom', items: results };
         }""")
 
+        if not raw or not raw.get("items"):
+            return []
+
+        if raw["source"] == "next_data":
+            return self._parse_next_data(raw["items"])
+        return self._parse_dom_cards(raw["items"])
+
+    def _parse_next_data(self, items: list[dict]) -> list[Product]:
         products = []
-        for item in raw:
+        for item in items:
+            try:
+                price_obj = item.get("price", {})
+                cents = price_obj.get("cents", 0)
+                currency = price_obj.get("currency", "USD")
+                price_str = f"${cents / 100:.2f}" if currency == "USD" else price_obj.get("formatted", f"{cents / 100:.2f}")
+
+                path = item.get("path", "")
+                link = f"{BASE_URL}{path}" if path else ""
+                pics = item.get("pictures", [])
+                image_url = ""
+                if pics:
+                    img_path = pics[0].get("path", "")
+                    if img_path:
+                        image_url = f"https://images.vestiairecollective.com/images/resized/w=600,q=75,f=auto,{img_path}"
+
+                p = Product(
+                    title=item.get("name", ""),
+                    price=price_str,
+                    link=link,
+                    image_url=image_url,
+                    designer=item.get("brand", {}).get("name", ""),
+                    condition=item.get("condition", {}).get("description", ""),
+                    size_info=item.get("measurementFormatted", ""),
+                    material=item.get("material", {}).get("name", ""),
+                    category=item.get("category", {}).get("name", ""),
+                    color=item.get("color", {}).get("name", ""),
+                )
+                if p.title and p.link:
+                    products.append(p)
+            except Exception as e:
+                print(f"  [!] Vestiaire parse error: {e}")
+        return products
+
+    def _parse_dom_cards(self, items: list[dict]) -> list[Product]:
+        products = []
+        for item in items:
             href = item.get("href", "")
             link = href if href.startswith("http") else f"{BASE_URL}{href}"
             p = self._parse_card(item.get("text", ""), link)
@@ -184,7 +239,6 @@ class VestiaireScraper:
                     img = f"https://images.vestiairecollective.com/images/resized/w=600,q=75,f=auto,{img}"
                 p.image_url = img
                 products.append(p)
-
         return products
 
     def _parse_card(self, text: str, link: str) -> Product | None:
@@ -200,7 +254,7 @@ class VestiaireScraper:
             if line_l in ("united states", "france", "italy", "spain", "germany", "united kingdom"):
                 continue
 
-            price_m = re.search(r'\$[\d,.]+', line)
+            price_m = re.search(r'[\$€£¥][\d,.]+|[\d,.]+\s*(?:USD|EUR|GBP)', line)
             if price_m:
                 if not p.price:
                     p.price = price_m.group()
@@ -217,7 +271,7 @@ class VestiaireScraper:
                 p.size_info = size_m.group().strip()
                 continue
 
-            if not p.designer and len(line) < 60 and not line.startswith("$"):
+            if not p.designer and len(line) < 60 and not re.match(r'^[\$€£]', line):
                 p.designer = line
                 continue
 
@@ -240,7 +294,7 @@ class VestiaireScraper:
             return
 
         parts = [s for s in path.strip("/").split("/") if s]
-        if len(parts) >= 2:
+        if len(parts) >= 2 and not p.category:
             p.category = parts[1].replace("-", " ").title()
 
         filename = parts[-1] if parts else ""
@@ -258,15 +312,17 @@ class VestiaireScraper:
         ]
 
         slug_lower = slug.lower()
-        for color in known_colors:
-            if slug_lower.startswith(color + "-"):
-                p.color = color.title()
-                break
+        if not p.color:
+            for color in known_colors:
+                if slug_lower.startswith(color + "-"):
+                    p.color = color.title()
+                    break
 
-        for mat in known_materials:
-            if mat.replace(" ", "-") in slug_lower:
-                p.material = mat.title()
-                break
+        if not p.material:
+            for mat in known_materials:
+                if mat.replace(" ", "-") in slug_lower:
+                    p.material = mat.title()
+                    break
 
 
 def _slugify(text: str, max_len: int = 60) -> str:
