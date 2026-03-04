@@ -1,33 +1,19 @@
-"""Vestiaire Collective scraper — Playwright with stealth + cloudscraper image downloads."""
+"""Vestiaire Collective scraper — direct search API + cloudscraper for Cloudflare bypass."""
 
-import asyncio
 import json
 import os
 import re
+import uuid
 import cloudscraper
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from urllib.parse import quote_plus
 
-from playwright.async_api import async_playwright
-from playwright_stealth import Stealth
-
-PROFILE_DIR = Path.home() / ".cache" / "vestiaire_scraper" / "browser_profile"
-PROXY_URL = os.environ.get("PROXY_URL")
-
-def _parse_proxy(url):
-    """Parse http://user:pass@host:port into Playwright proxy dict."""
-    if not url:
-        return None
-    from urllib.parse import urlparse
-    p = urlparse(url)
-    proxy = {"server": f"{p.scheme}://{p.hostname}:{p.port}"}
-    if p.username:
-        proxy["username"] = p.username
-    if p.password:
-        proxy["password"] = p.password
-    return proxy
 BASE_URL = "https://us.vestiairecollective.com"
+SEARCH_API = "https://search.vestiairecollective.com/v1/product/search"
+IMAGE_CDN = "https://images.vestiairecollective.com/images/resized/w=600,q=75,f=auto"
+
+PROXY_URL = os.environ.get("PROXY_URL")
+_PROXIES = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
 
 MIME_TO_EXT = {
     "image/webp": ".webp",
@@ -54,275 +40,154 @@ class Product:
     color: str = ""
 
 
-class VestiaireScraper:
-    def __init__(self, headless=False):
-        self.headless = headless
-        self._playwright = None
-        self._context = None
+_SEARCH_FIELDS = [
+    "name", "description", "brand", "model", "country", "price", "discount",
+    "link", "sold", "likes", "pictures", "colors", "size", "stock",
+    "universeId", "createdAt", "condition", "categoryLvl0",
+]
 
-    async def start(self):
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        self._playwright = await async_playwright().start()
-        launch_opts = dict(
-            user_data_dir=str(PROFILE_DIR),
-            headless=self.headless,
-            viewport={"width": 1280, "height": 900},
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=IsolateOrigins,site-per-process",
-            ],
-        )
-        proxy = _parse_proxy(PROXY_URL)
-        if proxy:
-            launch_opts["proxy"] = proxy
-        self._context = await self._playwright.chromium.launch_persistent_context(**launch_opts)
-        await Stealth().apply_stealth_async(self._context)
+_SEARCH_HEADERS = {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Origin": BASE_URL,
+    "Referer": f"{BASE_URL}/search/",
+    "x-usecase": "plpStandard",
+}
 
-    async def stop(self):
-        if self._context:
-            await self._context.close()
-        if self._playwright:
-            await self._playwright.stop()
 
-    async def __aenter__(self):
-        await self.start()
-        return self
+def search(query: str, max_pages: int = 1) -> list[Product]:
+    """Search Vestiaire via the internal search API."""
+    session = cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "darwin", "desktop": True}
+    )
+    if _PROXIES:
+        session.proxies.update(_PROXIES)
 
-    async def __aexit__(self, *exc):
-        await self.stop()
+    session_id = str(uuid.uuid4())
+    device_id = str(uuid.uuid4())
+    all_products: list[Product] = []
+    per_page = 60
 
-    async def search(self, query: str, max_pages: int = 1) -> list[Product]:
-        all_products: list[Product] = []
-        page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+    for page_num in range(max_pages):
+        offset = page_num * per_page
+        payload = {
+            "pagination": {"offset": offset, "limit": per_page},
+            "fields": _SEARCH_FIELDS,
+            "q": query,
+            "sortBy": "relevance",
+            "filters": {},
+            "locale": {"country": "US", "currency": "USD", "language": "us", "sizeType": "US"},
+        }
+        headers = {
+            **_SEARCH_HEADERS,
+            "x-search-session-id": session_id,
+            "x-search-query-id": str(uuid.uuid4()),
+            "x-deviceid": device_id,
+        }
 
-        for page_num in range(1, max_pages + 1):
-            url = f"{BASE_URL}/search/?q={quote_plus(query)}"
-            if page_num > 1:
-                url += f"&page={page_num}"
+        print(f"[*] Vestiaire API page {page_num + 1} (offset={offset})")
+        try:
+            resp = session.post(SEARCH_API, json=payload, headers=headers, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            print(f"[!] Vestiaire API error: {e}")
+            break
 
-            print(f"[*] Vestiaire page {page_num}: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(4000)
+        items = data.get("items", [])
+        if not items:
+            print(f"[*] No more results")
+            break
 
-            try:
-                cookie_btn = page.locator("#popin_tc_privacy_button_2, button:has-text('Accept')")
-                if await cookie_btn.count() > 0:
-                    await cookie_btn.first.click()
-                    await page.wait_for_timeout(1000)
-            except Exception:
-                pass
-
-            for _ in range(3):
-                await page.evaluate("window.scrollBy(0, window.innerHeight)")
-                await page.wait_for_timeout(800)
-
-            products = await self._extract_products(page)
-            if not products:
-                print(f"[*] No results on page {page_num}")
-                break
-
-            with_links = [p for p in products if p.link]
-            dropped = len(products) - len(with_links)
-            if dropped:
-                print(f"[*] Dropped {dropped} products without links")
-            all_products.extend(with_links)
-            print(f"[+] Page {page_num}: {len(with_links)} products with links")
-
-        print(f"\n[+] Total Vestiaire products: {len(all_products)}")
-        return all_products
-
-    async def _extract_products(self, page) -> list[Product]:
-        raw = await page.evaluate("""() => {
-            // Try __NEXT_DATA__ first for structured data
-            const ndScript = document.querySelector('script#__NEXT_DATA__');
-            if (ndScript) {
-                try {
-                    const nd = JSON.parse(ndScript.textContent);
-                    const items = nd?.props?.pageProps?.products
-                              || nd?.props?.pageProps?.catalogProducts
-                              || nd?.props?.pageProps?.initialData?.products
-                              || [];
-                    if (items.length > 0) {
-                        return { source: 'next_data', items };
-                    }
-                } catch(e) {}
-            }
-
-            // Fallback: DOM scraping with better image + price extraction
-            const results = [];
-            const seen = new Set();
-
-            function bestImgSrc(el) {
-                if (!el) return '';
-                for (const img of el.querySelectorAll('img')) {
-                    const src = img.currentSrc || img.src || img.dataset.src
-                             || img.getAttribute('srcset')?.split(',')[0]?.trim()?.split(' ')[0]
-                             || '';
-                    if (src.startsWith('http')) {
-                        return src.replace(/w=\\d+/, 'w=600').replace(/\\/\\d+x\\d+\\//, '/600x600/');
-                    }
-                }
-                return '';
-            }
-
-            function tryAdd(a) {
-                const href = a.getAttribute('href') || '';
-                if (!href || seen.has(href)) return;
-                if (!href.match(/\\/[\\w-]+-\\d+\\.shtml/) && !href.includes('/product/')) return;
-                seen.add(href);
-                const container = a.closest('[class*="product"]') || a.parentElement;
-                const text = (container?.innerText || a.innerText || '').trim();
-                if (text.length < 5) return;
-                const imgSrc = bestImgSrc(container) || bestImgSrc(a);
-                results.push({href, text, imgSrc});
-            }
-
-            document.querySelectorAll('a[data-testid="product-card"]').forEach(tryAdd);
-            if (results.length === 0) {
-                document.querySelectorAll('a[href]').forEach(tryAdd);
-            }
-            return { source: 'dom', items: results };
-        }""")
-
-        if not raw or not raw.get("items"):
-            return []
-
-        if raw["source"] == "next_data":
-            return self._parse_next_data(raw["items"])
-        return self._parse_dom_cards(raw["items"])
-
-    def _parse_next_data(self, items: list[dict]) -> list[Product]:
-        products = []
         for item in items:
-            try:
-                price_obj = item.get("price", {})
-                cents = price_obj.get("cents", 0)
-                currency = price_obj.get("currency", "USD")
-                price_str = f"${cents / 100:.2f}" if currency == "USD" else price_obj.get("formatted", f"{cents / 100:.2f}")
+            p = _parse_item(item)
+            if p and p.link:
+                all_products.append(p)
 
-                path = item.get("path", "")
-                link = f"{BASE_URL}{path}" if path else ""
-                pics = item.get("pictures", [])
-                image_url = ""
-                if pics:
-                    img_path = pics[0].get("path", "")
-                    if img_path:
-                        image_url = f"https://images.vestiairecollective.com/images/resized/w=600,q=75,f=auto,{img_path}"
+        total = data.get("paginationStats", {}).get("total", 0)
+        print(f"[+] Page {page_num + 1}: {len(items)} items (total available: {total})")
 
-                p = Product(
-                    title=item.get("name", ""),
-                    price=price_str,
-                    link=link,
-                    image_url=image_url,
-                    designer=item.get("brand", {}).get("name", ""),
-                    condition=item.get("condition", {}).get("description", ""),
-                    size_info=item.get("measurementFormatted", ""),
-                    material=item.get("material", {}).get("name", ""),
-                    category=item.get("category", {}).get("name", ""),
-                    color=item.get("color", {}).get("name", ""),
-                )
-                if p.title and p.link:
-                    products.append(p)
-            except Exception as e:
-                print(f"  [!] Vestiaire parse error: {e}")
-        return products
+        if offset + per_page >= total:
+            break
 
-    def _parse_dom_cards(self, items: list[dict]) -> list[Product]:
-        products = []
-        for item in items:
-            href = item.get("href", "")
-            link = href if href.startswith("http") else f"{BASE_URL}{href}"
-            p = self._parse_card(item.get("text", ""), link)
-            if p:
-                img = item.get("imgSrc", "")
-                if img and not img.startswith("http"):
-                    img = f"https://images.vestiairecollective.com/images/resized/w=600,q=75,f=auto,{img}"
-                p.image_url = img
-                products.append(p)
-        return products
+    print(f"\n[+] Total Vestiaire products: {len(all_products)}")
+    return all_products
 
-    def _parse_card(self, text: str, link: str) -> Product | None:
-        lines = [ln.strip().replace("\xa0", " ").strip() for ln in text.split("\n") if ln.strip()]
-        if not lines:
-            return None
 
-        p = Product(link=link)
+def _parse_item(item: dict) -> Product | None:
+    name = item.get("name", "").strip()
+    if not name:
+        return None
 
-        for line in lines:
-            line_l = line.lower()
+    brand = item.get("brand", {})
+    brand_name = brand.get("name", "") if isinstance(brand, dict) else str(brand)
 
-            if line_l in ("united states", "france", "italy", "spain", "germany", "united kingdom"):
-                continue
+    price_obj = item.get("price", {})
+    cents = price_obj.get("cents", 0)
+    currency = price_obj.get("currency", "USD")
+    price = f"${cents / 100:,.2f}" if currency == "USD" else f"{cents / 100:,.2f} {currency}"
 
-            price_m = re.search(r'[\$€£¥][\d,.]+|[\d,.]+\s*(?:USD|EUR|GBP)', line)
-            if price_m:
-                if not p.price:
-                    p.price = price_m.group()
-                elif not p.original_price:
-                    p.original_price = price_m.group()
-                continue
+    discount_obj = item.get("discount", {})
+    discount = ""
+    if isinstance(discount_obj, dict) and discount_obj.get("percentage"):
+        discount = f"{discount_obj['percentage']}% off"
+        orig_cents = discount_obj.get("originalPrice", {}).get("cents", 0)
+        if orig_cents:
+            original_price = f"${orig_cents / 100:,.2f}" if currency == "USD" else f"{orig_cents / 100:,.2f} {currency}"
+        else:
+            original_price = ""
+    else:
+        original_price = ""
 
-            if any(kw in line_l for kw in ["like new", "good condition", "fair condition", "never worn", "very good"]):
-                p.condition = line
-                continue
+    link_path = item.get("link", "")
+    link = f"{BASE_URL}{link_path}" if link_path and not link_path.startswith("http") else link_path
 
-            size_m = re.match(r'^(\d+\s+(?:FR|EU|US|UK|IT)|(?:XXS|XS|S|M|L|XL|XXL|XXXL)\s+International)', line)
-            if size_m:
-                p.size_info = size_m.group().strip()
-                continue
+    pics = item.get("pictures", [])
+    image_url = ""
+    if pics:
+        img_path = pics[0] if isinstance(pics[0], str) else pics[0].get("path", "")
+        if img_path:
+            image_url = f"{IMAGE_CDN}{img_path}" if not img_path.startswith("http") else img_path
 
-            if not p.designer and len(line) < 60 and not re.match(r'^[\$€£]', line):
-                p.designer = line
-                continue
+    colors = item.get("colors", {})
+    color = ""
+    if isinstance(colors, dict):
+        all_colors = colors.get("all", [])
+        if all_colors and isinstance(all_colors[0], dict):
+            color = all_colors[0].get("name", "")
 
-            if not p.title and len(line) > 3:
-                p.title = line
-                continue
+    size_obj = item.get("size", {})
+    size_info = size_obj.get("label", "") if isinstance(size_obj, dict) else ""
 
-        if not p.title and p.designer:
-            p.title = p.designer
+    condition_val = item.get("condition", "")
+    condition = ""
+    if isinstance(condition_val, dict):
+        condition = condition_val.get("description", condition_val.get("name", ""))
+    elif isinstance(condition_val, str):
+        condition = condition_val
 
-        if not p.title:
-            return None
+    category = ""
+    cat_val = item.get("categoryLvl0", "")
+    if isinstance(cat_val, dict):
+        category = cat_val.get("name", "")
+    elif isinstance(cat_val, str):
+        category = cat_val
 
-        self._extract_from_url(link, p)
-        return p
-
-    def _extract_from_url(self, link: str, p: Product):
-        path = link.split("vestiairecollective.com")[-1] if "vestiairecollective.com" in link else ""
-        if not path:
-            return
-
-        parts = [s for s in path.strip("/").split("/") if s]
-        if len(parts) >= 2 and not p.category:
-            p.category = parts[1].replace("-", " ").title()
-
-        filename = parts[-1] if parts else ""
-        slug = filename.rsplit("-", 1)[0] if filename.endswith(".shtml") else filename
-
-        known_colors = [
-            "black", "white", "brown", "red", "blue", "green", "pink",
-            "grey", "gray", "beige", "navy", "purple", "orange", "yellow",
-            "gold", "silver", "burgundy", "camel", "khaki", "ecru", "multicolour",
-        ]
-        known_materials = [
-            "leather", "canvas", "cloth", "cotton", "silk", "wool",
-            "synthetic", "denim", "suede", "patent leather", "tweed",
-            "cashmere", "polyester", "nylon", "linen", "velvet",
-        ]
-
-        slug_lower = slug.lower()
-        if not p.color:
-            for color in known_colors:
-                if slug_lower.startswith(color + "-"):
-                    p.color = color.title()
-                    break
-
-        if not p.material:
-            for mat in known_materials:
-                if mat.replace(" ", "-") in slug_lower:
-                    p.material = mat.title()
-                    break
+    return Product(
+        title=name,
+        price=price,
+        original_price=original_price,
+        discount=discount,
+        link=link,
+        image_url=image_url,
+        designer=brand_name,
+        condition=condition,
+        size_info=size_info,
+        color=color,
+        category=category,
+    )
 
 
 def _slugify(text: str, max_len: int = 60) -> str:
@@ -339,8 +204,8 @@ def save_product_images(products: list[Product], output_path: str):
     session = cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "darwin", "desktop": True}
     )
-    if PROXY_URL:
-        session.proxies.update({"http": PROXY_URL, "https": PROXY_URL})
+    if _PROXIES:
+        session.proxies.update(_PROXIES)
     session.headers.update({
         "Referer": BASE_URL + "/",
         "Accept": "image/webp,image/*,*/*",
@@ -354,7 +219,7 @@ def save_product_images(products: list[Product], output_path: str):
         slug = _slugify(p.title)
         base = f"{idx}_{slug}" if slug else idx
         try:
-            resp = session.get(p.image_url, timeout=15)
+            resp = session.get(p.image_url, timeout=10)
             resp.raise_for_status()
             ct = resp.headers.get("Content-Type", "image/jpeg")
             ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")

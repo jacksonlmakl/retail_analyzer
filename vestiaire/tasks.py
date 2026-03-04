@@ -1,6 +1,5 @@
 """Celery tasks for Vestiaire Collective scraping."""
 
-import asyncio
 import tempfile
 from pathlib import Path
 
@@ -12,7 +11,7 @@ app.config_from_object("vestiaire.celeryconfig")
 
 @app.task(bind=True, name="vestiaire.tasks.scrape_and_load")
 def scrape_and_load(self, query, pages=1, country="us", language="en"):
-    from vestiaire.scraper import VestiaireScraper, save_product_images, save_to_json
+    from vestiaire.scraper import search, save_product_images, save_to_json
     from vestiaire.loader import get_connection, upload_and_load
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -20,12 +19,7 @@ def scrape_and_load(self, query, pages=1, country="us", language="en"):
         results_path = tmp_path / "results.json"
         images_dir = tmp_path / "images"
 
-        async def _scrape():
-            async with VestiaireScraper(headless=False) as scraper:
-                prods = await scraper.search(query, max_pages=pages)
-                return prods
-
-        products = asyncio.run(_scrape())
+        products = search(query, max_pages=pages)
 
         if not products:
             return {"run_id": None, "products_loaded": 0, "error": "No products found"}

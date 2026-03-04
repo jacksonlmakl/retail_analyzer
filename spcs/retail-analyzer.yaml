@@ -168,15 +168,17 @@ spec:
     - name: vestiaire-worker
       image: /retail_analyzer/images/repo/vestiaire:latest
       command:
-        - bash
-        - -c
-        - >-
-          Xvfb :100 -screen 0 1280x900x24 -nolisten tcp -nolisten unix &
-          sleep 1 &&
-          export DISPLAY=:100 &&
-          celery -A vestiaire.tasks worker
-          --loglevel=info --concurrency=1 --pool=solo
-          -Q vestiaire -n vestiaire@%h
+        - celery
+        - -A
+        - vestiaire.tasks
+        - worker
+        - --loglevel=info
+        - --concurrency=1
+        - --pool=solo
+        - -Q
+        - vestiaire
+        - -n
+        - vestiaire@%h
       env:
         PROXY_URL: "<PROXY_URL>"
         REDIS_URL: redis://localhost:6379/0
@@ -190,11 +192,11 @@ spec:
           envVarName: SNOWFLAKE_PRIVATE_KEY_B64
       resources:
         requests:
-          cpu: "0.5"
-          memory: "2G"
+          cpu: "0.2"
+          memory: "512M"
         limits:
-          cpu: "2"
-          memory: "4G"
+          cpu: "1"
+          memory: "1G"
 
     # ── Rebag ───────────────────────────────────────────────────
     - name: rebag-api
