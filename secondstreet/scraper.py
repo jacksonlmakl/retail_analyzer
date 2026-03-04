@@ -14,6 +14,19 @@ from playwright.async_api import async_playwright
 
 PROFILE_DIR = Path.home() / ".cache" / "secondstreet_scraper" / "browser_profile"
 PROXY_URL = os.environ.get("PROXY_URL")
+
+def _parse_proxy(url):
+    """Parse http://user:pass@host:port into Playwright proxy dict."""
+    if not url:
+        return None
+    from urllib.parse import urlparse
+    p = urlparse(url)
+    proxy = {"server": f"{p.scheme}://{p.hostname}:{p.port}"}
+    if p.username:
+        proxy["username"] = p.username
+    if p.password:
+        proxy["password"] = p.password
+    return proxy
 _PROXIES = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
 BASE_URL = "https://ec.2ndstreetusa.com"
 
@@ -221,8 +234,9 @@ class SecondStreetScraper:
             viewport={"width": 1280, "height": 900},
             args=["--disable-blink-features=AutomationControlled"],
         )
-        if PROXY_URL:
-            launch_opts["proxy"] = {"server": PROXY_URL}
+        proxy = _parse_proxy(PROXY_URL)
+        if proxy:
+            launch_opts["proxy"] = proxy
         self._context = await self._playwright.chromium.launch_persistent_context(**launch_opts)
 
     async def stop(self):

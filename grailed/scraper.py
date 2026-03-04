@@ -62,6 +62,9 @@ def search(query: str, max_pages: int = 1, hits_per_page: int = 40) -> list[Prod
     are tried (dropping trailing words) until results are found.
     """
     client = GrailedAPIClient()
+    if _PROXIES:
+        from grailed_api.services.api_service import ApiService
+        ApiService._session.proxies.update(_PROXIES)
     all_products: list[Product] = []
 
     effective_query = query

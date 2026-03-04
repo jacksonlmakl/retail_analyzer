@@ -29,6 +29,19 @@ from playwright_stealth import Stealth
 PROFILE_DIR = Path.home() / ".cache" / "google_shopping_scraper" / "browser_profile"
 PROXY_URL = os.environ.get("PROXY_URL")
 
+def _parse_proxy(url):
+    """Parse http://user:pass@host:port into Playwright proxy dict."""
+    if not url:
+        return None
+    from urllib.parse import urlparse
+    p = urlparse(url)
+    proxy = {"server": f"{p.scheme}://{p.hostname}:{p.port}"}
+    if p.username:
+        proxy["username"] = p.username
+    if p.password:
+        proxy["password"] = p.password
+    return proxy
+
 
 @dataclass
 class Product:
@@ -71,8 +84,9 @@ class GoogleShoppingScraper:
                 "--disable-features=IsolateOrigins,site-per-process",
             ],
         )
-        if PROXY_URL:
-            launch_opts["proxy"] = {"server": PROXY_URL}
+        proxy = _parse_proxy(PROXY_URL)
+        if proxy:
+            launch_opts["proxy"] = proxy
         self._context = await self._playwright.chromium.launch_persistent_context(**launch_opts)
         await Stealth().apply_stealth_async(self._context)
 
