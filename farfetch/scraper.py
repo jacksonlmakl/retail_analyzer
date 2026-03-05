@@ -388,8 +388,6 @@ def save_product_images(products: list[Product], output_path: str, max_seconds: 
     images_dir.mkdir(parents=True, exist_ok=True)
 
     session = req_lib.Session()
-    if PROXY_URL:
-        session.proxies.update({"http": PROXY_URL, "https": PROXY_URL})
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
