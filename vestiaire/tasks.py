@@ -19,12 +19,12 @@ def scrape_and_load(self, query, pages=1, country="us", language="en"):
         results_path = tmp_path / "results.json"
         images_dir = tmp_path / "images"
 
-        products = search(query, max_pages=pages)
+        products, api_session = search(query, max_pages=pages)
 
         if not products:
             return {"run_id": None, "products_loaded": 0, "error": "No products found"}
 
-        save_product_images(products, str(results_path))
+        save_product_images(products, str(results_path), session=api_session)
         save_to_json(products, str(results_path))
 
         conn = get_connection()

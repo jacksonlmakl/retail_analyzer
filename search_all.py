@@ -128,7 +128,7 @@ def main():
     parser.add_argument("query", help="Search query (e.g. 'louis vuitton wallet')")
     parser.add_argument("--pages", type=int, default=1, help="Pages to scrape per marketplace (default: 1)")
     parser.add_argument("--poll-interval", type=float, default=5.0, help="Seconds between status polls (default: 5)")
-    parser.add_argument("--timeout", type=float, default=300.0, help="Max seconds to wait per marketplace (default: 300)")
+    parser.add_argument("--timeout", type=float, default=600.0, help="Max seconds to wait per marketplace (default: 600)")
     parser.add_argument("--spcs", action="store_true", help="Authenticate with Snowflake session token for SPCS endpoints")
     args = parser.parse_args()
 

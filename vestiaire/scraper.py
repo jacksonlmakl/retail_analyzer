@@ -57,8 +57,8 @@ _SEARCH_HEADERS = {
 }
 
 
-def search(query: str, max_pages: int = 1) -> list[Product]:
-    """Search Vestiaire via the internal search API."""
+def search(query: str, max_pages: int = 1) -> tuple[list[Product], requests.Session]:
+    """Search Vestiaire via the internal search API. Returns (products, session)."""
     session = requests.Session()
     if _PROXIES:
         session.proxies.update(_PROXIES)
@@ -112,7 +112,7 @@ def search(query: str, max_pages: int = 1) -> list[Product]:
             break
 
     print(f"\n[+] Total Vestiaire products: {len(all_products)}")
-    return all_products
+    return all_products, session
 
 
 def _parse_item(item: dict) -> Product | None:
@@ -195,12 +195,13 @@ def _slugify(text: str, max_len: int = 60) -> str:
     return slug[:max_len]
 
 
-def save_product_images(products: list[Product], output_path: str):
+def save_product_images(products: list[Product], output_path: str, session: requests.Session | None = None):
     output_path = Path(output_path)
     images_dir = output_path.parent / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    session = requests.Session()
+    if session is None:
+        session = requests.Session()
     session.headers.update({
         "User-Agent": _SEARCH_HEADERS["User-Agent"],
         "Referer": BASE_URL + "/",
