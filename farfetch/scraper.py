@@ -380,7 +380,7 @@ def _slugify(text: str, max_len: int = 60) -> str:
     return slug[:max_len]
 
 
-def save_product_images(products: list[Product], output_path: str, max_seconds: int = 600):
+def save_product_images(products: list[Product], output_path: str, max_seconds: int = 300):
     import time
 
     output_path = Path(output_path)
@@ -388,6 +388,9 @@ def save_product_images(products: list[Product], output_path: str, max_seconds: 
     images_dir.mkdir(parents=True, exist_ok=True)
 
     session = req_lib.Session()
+    if PROXY_URL:
+        session.proxies.update({"http": PROXY_URL, "https": PROXY_URL})
+        print(f"[*] Image downloads using proxy")
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -396,34 +399,33 @@ def save_product_images(products: list[Product], output_path: str, max_seconds: 
     })
 
     saved = 0
+    consecutive_fails = 0
     start = time.monotonic()
     for i, p in enumerate(products):
         if time.monotonic() - start > max_seconds:
             print(f"  [!] Image download budget ({max_seconds}s) exceeded, skipping remaining")
+            break
+        if consecutive_fails >= 10:
+            print(f"  [!] 10 consecutive failures, skipping remaining images")
             break
         if not p.image_url or not p.image_url.startswith("http"):
             continue
         idx = f"{i + 1:03d}"
         slug = _slugify(p.title)
         base = f"{idx}_{slug}" if slug else idx
-        downloaded = False
-        for attempt in range(3):
-            try:
-                resp = session.get(p.image_url, timeout=15)
-                resp.raise_for_status()
-                ct = resp.headers.get("Content-Type", "image/jpeg")
-                ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
-                fp = images_dir / f"{base}{ext}"
-                fp.write_bytes(resp.content)
-                p.image_path = f"images/{fp.name}"
-                saved += 1
-                downloaded = True
-                break
-            except Exception:
-                if attempt < 2:
-                    time.sleep(2 * (attempt + 1))
-        if not downloaded:
-            print(f"  [!] Image #{i+1}: failed after 3 attempts")
+        try:
+            resp = session.get(p.image_url, timeout=15)
+            resp.raise_for_status()
+            ct = resp.headers.get("Content-Type", "image/jpeg")
+            ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
+            fp = images_dir / f"{base}{ext}"
+            fp.write_bytes(resp.content)
+            p.image_path = f"images/{fp.name}"
+            saved += 1
+            consecutive_fails = 0
+        except Exception as exc:
+            consecutive_fails += 1
+            print(f"  [!] Image {i+1} failed: {type(exc).__name__}")
         time.sleep(0.3)
 
     print(f"[+] Saved {saved} images to {images_dir}/")
