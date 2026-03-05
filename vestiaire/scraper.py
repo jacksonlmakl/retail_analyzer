@@ -201,8 +201,6 @@ def save_product_images(products: list[Product], output_path: str):
     images_dir.mkdir(parents=True, exist_ok=True)
 
     session = requests.Session()
-    if _PROXIES:
-        session.proxies.update(_PROXIES)
     session.headers.update({
         "User-Agent": _SEARCH_HEADERS["User-Agent"],
         "Referer": BASE_URL + "/",

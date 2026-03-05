@@ -84,9 +84,6 @@ class GoogleShoppingScraper:
                 "--disable-features=IsolateOrigins,site-per-process",
             ],
         )
-        proxy = _parse_proxy(PROXY_URL)
-        if proxy:
-            launch_opts["proxy"] = proxy
         self._context = await self._playwright.chromium.launch_persistent_context(**launch_opts)
         await Stealth().apply_stealth_async(self._context)
 
@@ -165,12 +162,17 @@ class GoogleShoppingScraper:
                     break
 
                 print(f"[+] Found {len(products)} products on page {page_num + 1}")
-                await self._extract_links(page, products)
+                try:
+                    await self._extract_links(page, products)
+                except Exception as e:
+                    print(f"[!] Link extraction failed: {e}")
+
                 with_links = [p for p in products if p.link]
-                dropped = len(products) - len(with_links)
-                if dropped:
-                    print(f"[*] Dropped {dropped} products without links")
-                all_products.extend(with_links)
+                if with_links:
+                    all_products.extend(with_links)
+                else:
+                    print(f"[*] No links extracted, keeping all {len(products)} products without links")
+                    all_products.extend(products)
 
             except Exception as e:
                 print(f"[!] Error on page {page_num + 1}: {e}")
@@ -339,19 +341,25 @@ class GoogleShoppingScraper:
         linked = 0
         for product_idx, card_idx in enumerate(unique_indices[:len(products)]):
             seller = products[product_idx].seller
+            try:
+                await cards.nth(card_idx).click(timeout=5000)
+                await page.wait_for_timeout(1500)
 
-            await cards.nth(card_idx).click()
-            await page.wait_for_timeout(1500)
+                seller_links = await page.evaluate(self._PANEL_SELLER_LINKS_JS)
+                link = self._pick_seller_link(seller_links, seller)
 
-            seller_links = await page.evaluate(self._PANEL_SELLER_LINKS_JS)
-            link = self._pick_seller_link(seller_links, seller)
+                if link:
+                    products[product_idx].link = link
+                    linked += 1
 
-            if link:
-                products[product_idx].link = link
-                linked += 1
-
-            await page.keyboard.press("Escape")
-            await page.wait_for_timeout(300)
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(300)
+            except Exception:
+                try:
+                    await page.keyboard.press("Escape")
+                    await page.wait_for_timeout(300)
+                except Exception:
+                    pass
 
         print(f"[+] Extracted links for {linked}/{len(products)} products")
 

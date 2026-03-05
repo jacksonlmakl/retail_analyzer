@@ -72,9 +72,6 @@ class FarfetchScraper:
                 "--disable-features=IsolateOrigins,site-per-process",
             ],
         )
-        proxy = _parse_proxy(PROXY_URL)
-        if proxy:
-            launch_opts["proxy"] = proxy
         self._context = await self._playwright.chromium.launch_persistent_context(**launch_opts)
         await Stealth().apply_stealth_async(self._context)
 
@@ -99,16 +96,7 @@ class FarfetchScraper:
             url = f"{BASE_URL}/shopping/women/search/items.aspx?q={quote_plus(query)}&page={page_num}"
 
             print(f"[*] Farfetch page {page_num}: {url}")
-            try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            except Exception:
-                print(f"[!] domcontentloaded timed out, retrying with load timeout...")
-                try:
-                    await page.goto(url, wait_until="commit", timeout=60000)
-                    await page.wait_for_timeout(10000)
-                except Exception as e:
-                    print(f"[!] Navigation failed: {e}")
-                    break
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(5000)
 
             # Dismiss cookie popup
@@ -299,18 +287,36 @@ class FarfetchScraper:
             item = entry.get("item", entry)
             try:
                 offers = item.get("offers", {})
-                price = offers.get("price", "") if isinstance(offers, dict) else ""
-                currency = offers.get("priceCurrency", "USD") if isinstance(offers, dict) else "USD"
-                price_str = f"${price}" if currency == "USD" and price else str(price)
+                if not isinstance(offers, dict):
+                    offers = {}
+                price_val = offers.get("price", "")
+                currency = offers.get("priceCurrency", "USD")
+                if isinstance(price_val, (int, float)):
+                    price_str = f"${price_val:,.2f}" if currency == "USD" else f"{price_val:,.2f} {currency}"
+                else:
+                    price_str = f"${price_val}" if currency == "USD" and price_val else str(price_val)
+
+                link = item.get("url", "") or offers.get("url", "")
+
+                images = item.get("image", "")
+                if isinstance(images, list):
+                    image_url = images[0] if images else ""
+                else:
+                    image_url = images
+
+                brand = item.get("brand", {})
+                designer = brand.get("name", "") if isinstance(brand, dict) else str(brand)
 
                 p = Product(
                     title=item.get("name", ""),
                     price=price_str,
-                    link=item.get("url", ""),
-                    image_url=item.get("image", ""),
-                    designer=item.get("brand", {}).get("name", "") if isinstance(item.get("brand"), dict) else "",
-                    pre_owned="pre-owned" in item.get("name", "").lower(),
+                    link=link,
+                    image_url=image_url,
+                    designer=designer,
+                    pre_owned="pre-owned" in (item.get("name", "") + " " + designer).lower(),
                 )
+                if p.link and not p.link.startswith("http"):
+                    p.link = f"{BASE_URL}{p.link}"
                 if p.title and p.link:
                     products.append(p)
             except Exception as e:
