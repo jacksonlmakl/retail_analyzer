@@ -380,7 +380,7 @@ def _slugify(text: str, max_len: int = 60) -> str:
     return slug[:max_len]
 
 
-def save_product_images(products: list[Product], output_path: str, max_seconds: int = 300):
+def save_product_images(products: list[Product], output_path: str, max_seconds: int = 600):
     import time
 
     output_path = Path(output_path)
@@ -406,17 +406,25 @@ def save_product_images(products: list[Product], output_path: str, max_seconds: 
         idx = f"{i + 1:03d}"
         slug = _slugify(p.title)
         base = f"{idx}_{slug}" if slug else idx
-        try:
-            resp = session.get(p.image_url, timeout=10)
-            resp.raise_for_status()
-            ct = resp.headers.get("Content-Type", "image/jpeg")
-            ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
-            fp = images_dir / f"{base}{ext}"
-            fp.write_bytes(resp.content)
-            p.image_path = f"images/{fp.name}"
-            saved += 1
-        except Exception as e:
-            print(f"  [!] Image #{i+1}: {e}")
+        downloaded = False
+        for attempt in range(3):
+            try:
+                resp = session.get(p.image_url, timeout=15)
+                resp.raise_for_status()
+                ct = resp.headers.get("Content-Type", "image/jpeg")
+                ext = MIME_TO_EXT.get(ct.split(";")[0].strip(), ".jpg")
+                fp = images_dir / f"{base}{ext}"
+                fp.write_bytes(resp.content)
+                p.image_path = f"images/{fp.name}"
+                saved += 1
+                downloaded = True
+                break
+            except Exception:
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1))
+        if not downloaded:
+            print(f"  [!] Image #{i+1}: failed after 3 attempts")
+        time.sleep(0.3)
 
     print(f"[+] Saved {saved} images to {images_dir}/")
 
